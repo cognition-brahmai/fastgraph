@@ -3,7 +3,7 @@
 [![Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![PyPI Version](https://img.shields.io/badge/pypi-v2.0.0-orange.svg)](https://pypi.org/project/fastgraph/)
-
+<img src="https://raw.githubusercontent.com/cognition-brahmai/fastgraph/refs/heads/main/4f0acacd709795a384cf33419ef44346.jpg"/>
 FastGraph is a high-performance, in-memory graph database engineered for Python applications that demand speed, low latency, and zero nonsense. Built for developers who want graph operations that actually keep up.
 
 Created by **BRAHMAI** with ❤️ & ☕.
