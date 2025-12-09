@@ -66,8 +66,8 @@ except FileNotFoundError:
     }
 
 setup(
-    name='fastgraph',
-    version='2.0.0',
+    name='fastgx',
+    version='2.0.3',
     description='High-performance in-memory graph database',
     long_description=long_description,
     long_description_content_type='text/markdown',

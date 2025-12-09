@@ -28,7 +28,7 @@ Created by **BRAHMAI** with ❤️ & ☕.
 ### Installation
 
 ```bash
-pip install fastgraph
+pip install fastgx
 ```
 
 ### Basic Usage
@@ -187,7 +187,7 @@ print(monitor.get_stats()["query_op"].avg_duration)
 ## Testing
 
 ```bash
-pip install fastgraph[dev]
+pip install fastgx[dev]
 pytest
 pytest --cov=fastgraph --cov-report=html
 ```
@@ -199,7 +199,7 @@ pytest --cov=fastgraph --cov-report=html
 ### Setup
 
 ```bash
-git clone https://github.com/fastgraph/fastgraph.git
+git clone https://github.com/cognition-brahmai/fastgraph.git
 cd fastgraph
 pip install -e ".[dev]"
 pre-commit install
