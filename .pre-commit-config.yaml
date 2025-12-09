@@ -1,0 +1,117 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-json
+      - id: check-xml
+      - id: debug-statements
+      - id: name-tests-test
+        args: ['-- django']  # FastGraph is not Django, but this helps catch test naming
+      - id: requirements-txt-fixer
+      - id: fix-byte-order-marker
+
+  - repo: https://github.com/psf/black
+    rev: 23.7.0
+    hooks:
+      - id: black
+        language_version: python3
+        args: [--line-length=88]
+
+  - repo: https://github.com/pycqa/isort
+    rev: 5.12.0
+    hooks:
+      - id: isort
+        args: [--profile=black, --line-length=88]
+
+  - repo: https://github.com/pycqa/flake8
+    rev: 6.0.0
+    hooks:
+      - id: flake8
+        args: [--max-line-length=88, --extend-ignore=E203,W503]
+        additional_dependencies:
+          - flake8-docstrings
+          - flake8-bugbear
+          - flake8-comprehensions
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.5.1
+    hooks:
+      - id: mypy
+        additional_dependencies:
+          - types-PyYAML
+          - types-requests
+        args: [--ignore-missing-imports, --no-strict-optional]
+        exclude: ^examples/
+
+  - repo: https://github.com/pycqa/bandit
+    rev: 1.7.5
+    hooks:
+      - id: bandit
+        args: [-r, fastgraph, -f, json, -o, bandit-report.json]
+        pass_filenames: false
+        always_run: false
+
+  - repo: https://github.com/pycqa/safety
+    rev: 2.3.5
+    hooks:
+      - id: safety
+        args: [--json, --output, safety-report.json]
+
+  # Python security scanning
+  - repo: https://github.com/Lucas-C/pre-commit-hooks-safety
+    rev: v1.3.2
+    hooks:
+      - id: python-safety-dependencies-check
+
+  # Check for Secrets
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.4.0
+    hooks:
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+        exclude: ^\.secrets\.baseline$
+
+  # Documentation
+  - repo: https://github.com/pycqa/pydocstyle
+    rev: 6.3.0
+    hooks:
+      - id: pydocstyle
+        args: [--convention=google]
+        exclude: ^(examples/|tests/)
+
+  # Code complexity
+  - repo: https://github.com/xenon-python/xenon
+    rev: 0.9.0
+    hooks:
+      - id: xenon
+        args: [--max-average=A, --max-modules=B, --max-absolute=B]
+
+  # Upgrade dependencies
+  - repo: local
+    hooks:
+      - id: pip-compile
+        name: pip-compile
+        entry: pip-compile
+        language: system
+        files: ^requirements\.in$
+        pass_filenames: false
+        always_run: false
+
+ci:
+  autofix_commit_msg: |
+    [pre-commit.ci] auto fixes from pre-commit.com hooks
+
+    for more information, see https://pre-commit.ci
+  autofix_prs: true
+  autoupdate_branch: ''
+  autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
+  autoupdate_schedule: weekly
+  skip: [pip-compile, detect-secrets]
+  submodules: false
