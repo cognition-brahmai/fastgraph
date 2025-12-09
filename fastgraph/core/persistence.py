@@ -325,25 +325,25 @@ class PersistenceManager:
     
     def _save_json(self, data: Dict[str, Any], path: Path, compress: bool) -> None:
         """Save data using JSON format."""
-        with open(path, "w") as f:
-            if compress:
-                import gzip
-                with gzip.GzipFile(fileobj=f, mode='wt', encoding='utf-8') as gz_file:
-                    json.dump(data, gz_file, indent=2, default=str)
-            else:
+        if compress:
+            import gzip
+            with gzip.open(path, mode='wt', encoding='utf-8') as gz_file:
+                json.dump(data, gz_file, indent=2, default=str)
+        else:
+            with open(path, "w", encoding='utf-8') as f:
                 json.dump(data, f, indent=2, default=str)
     
     def _load_json(self, path: Path) -> Dict[str, Any]:
         """Load data using JSON format."""
+        # Check if file is gzipped
         with open(path, "rb") as f:
-            # Check if file is gzipped
             f.seek(0)
             header = f.read(2)
             f.seek(0)
             
             if header == b'\x1f\x8b':  # gzip magic number
                 import gzip
-                with gzip.GzipFile(fileobj=f, mode='rt', encoding='utf-8') as gz_file:
+                with gzip.open(path, mode='rt', encoding='utf-8') as gz_file:
                     return json.load(gz_file)
             else:
                 # Use text mode for regular JSON
