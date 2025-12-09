@@ -20,10 +20,10 @@ def check_file_exists(file_path: str, required: bool = True) -> bool:
     """Check if a file exists."""
     exists = Path(file_path).exists()
     if required and not exists:
-        print(f"❌ Missing required file: {file_path}")
+        print(f"Missing required file: {file_path}")
         return False
     elif exists:
-        print(f"✅ Found: {file_path}")
+        print(f"Found: {file_path}")
     return True
 
 
@@ -32,28 +32,28 @@ def check_importable(module_name: str) -> bool:
     try:
         spec = importlib.util.find_spec(module_name)
         if spec is None:
-            print(f"❌ Cannot import module: {module_name}")
+            print(f"Cannot import module: {module_name}")
             return False
         
         module = importlib.import_module(module_name)
-        print(f"✅ Importable: {module_name}")
+        print(f"Importable: {module_name}")
         return True
     except Exception as e:
-        print(f"❌ Import error for {module_name}: {e}")
+        print(f"Import error for {module_name}: {e}")
         return False
 
 
 def run_command(cmd: list, description: str) -> bool:
     """Run a command and check if it succeeds."""
-    print(f"\n🔧 {description}")
+    print(f"\n{description}")
     print(f"Command: {' '.join(cmd)}")
     
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        print("✅ Success")
+        print("Success")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"❌ Failed: {e}")
+        print(f"Failed: {e}")
         if e.stdout:
             print(f"Stdout: {e.stdout[:500]}")
         if e.stderr:
@@ -63,7 +63,7 @@ def run_command(cmd: list, description: str) -> bool:
 
 def validate_package_structure():
     """Validate the package structure."""
-    print("📋 Validating FastGraph Package Structure")
+    print("Validating FastGraph Package Structure")
     print("=" * 50)
     
     # Required files for PyPI
@@ -77,7 +77,7 @@ def validate_package_structure():
         "CHANGELOG.md"
     ]
     
-    print("\n📁 Checking required files...")
+    print("\nChecking required files...")
     all_files_exist = True
     for file_path in required_files:
         if not check_file_exists(file_path):
@@ -95,7 +95,7 @@ def validate_package_structure():
         ".github/workflows"
     ]
     
-    print("\n📂 Checking package directories...")
+    print("\nChecking package directories...")
     for dir_path in package_dirs:
         if check_file_exists(dir_path, required=True):
             # Check for __init__.py in package directories
@@ -113,7 +113,7 @@ def validate_package_structure():
         "example_config.json"
     ]
     
-    print("\n📄 Checking key files...")
+    print("\nChecking key files...")
     for file_path in key_files:
         check_file_exists(file_path, required=True)
     
@@ -122,7 +122,7 @@ def validate_package_structure():
 
 def validate_imports():
     """Validate package imports."""
-    print("\n🔍 Validating imports...")
+    print("\nValidating imports...")
     print("=" * 30)
     
     # Core imports
@@ -149,7 +149,7 @@ def validate_imports():
 
 def validate_build():
     """Validate package building."""
-    print("\n🔨 Validating package build...")
+    print("\nValidating package build...")
     print("=" * 30)
     
     # Check if build tools are available
@@ -172,12 +172,12 @@ def validate_build():
 
 def validate_installation():
     """Validate package installation."""
-    print("\n📦 Validating installation...")
+    print("\nValidating installation...")
     print("=" * 30)
     
     # Install the built package
     install_success = run_command(
-        [sys.executable, "-m", "pip", "install", "dist/*.whl"],
+        [sys.executable, "-m", "pip", "install", "dist/fastgraph-2.0.0-py3-none-any.whl"],
         "Install package"
     )
     
@@ -198,10 +198,10 @@ print("Basic functionality works")
         try:
             result = subprocess.run([sys.executable, test_file], 
                                   capture_output=True, text=True, check=True)
-            print("✅ Basic functionality test passed")
+            print("Basic functionality test passed")
             print(f"Output: {result.stdout.strip()}")
         except subprocess.CalledProcessError as e:
-            print(f"❌ Basic functionality test failed: {e}")
+            print(f"Basic functionality test failed: {e}")
             return False
         finally:
             os.unlink(test_file)
@@ -211,7 +211,7 @@ print("Basic functionality works")
 
 def validate_metadata():
     """Validate package metadata."""
-    print("\n📊 Validating metadata...")
+    print("\nValidating metadata...")
     print("=" * 25)
     
     # Check pyproject.toml
@@ -230,31 +230,31 @@ def validate_metadata():
                 missing_fields.append(field)
         
         if missing_fields:
-            print(f"❌ Missing metadata fields: {missing_fields}")
+            print(f"Missing metadata fields: {missing_fields}")
             return False
         else:
-            print("✅ All required metadata fields present")
+            print("All required metadata fields present")
             
-        print(f"✅ Package name: {project_data['name']}")
-        print(f"✅ Version: {project_data['version']}")
-        print(f"✅ Description: {project_data['description'][:50]}...")
+        print(f"Package name: {project_data['name']}")
+        print(f"Version: {project_data['version']}")
+        print(f"Description: {project_data['description'][:50]}...")
         
     except Exception as e:
-        print(f"❌ Error reading pyproject.toml: {e}")
+        print(f"Error reading pyproject.toml: {e}")
         return False
     
     # Check README length (PyPI recommends descriptive README)
     try:
-        with open("README.md", 'r') as f:
+        with open("README.md", 'r', encoding='utf-8') as f:
             readme_content = f.read()
         
         if len(readme_content) < 500:
-            print("⚠️  README is quite short, consider adding more details")
+            print("README is quite short, consider adding more details")
         else:
-            print("✅ README length is adequate")
+            print("README length is adequate")
         
     except Exception as e:
-        print(f"❌ Error reading README: {e}")
+        print(f"Error reading README: {e}")
         return False
     
     return True
@@ -262,7 +262,7 @@ def validate_metadata():
 
 def validate_code_quality():
     """Validate code quality."""
-    print("\n🧹 Validating code quality...")
+    print("\nValidating code quality...")
     print("=" * 30)
     
     # Check if linting tools are available
@@ -271,21 +271,21 @@ def validate_code_quality():
     for tool in linting_tools:
         try:
             subprocess.run([tool, "--version"], capture_output=True, check=True)
-            print(f"✅ {tool} available")
+            print(f"{tool} available")
         except (subprocess.CalledProcessError, FileNotFoundError):
-            print(f"⚠️  {tool} not available (install with: pip install {tool})")
+            print(f"{tool} not available (install with: pip install {tool})")
     
     return True
 
 
 def main():
     """Main validation function."""
-    print("🚀 FastGraph Package Validation")
+    print("FastGraph Package Validation")
     print("=" * 40)
     
     # Change to package directory
     if not Path("pyproject.toml").exists():
-        print("❌ Not in package root directory (pyproject.toml not found)")
+        print("Not in package root directory (pyproject.toml not found)")
         return False
     
     # Run validations
@@ -301,7 +301,7 @@ def main():
         results[name] = validator()
     
     # Build and installation validate (may create files)
-    print("\n🏗️  Build and Installation Validation...")
+    print("\nBuild and Installation Validation...")
     print("=" * 40)
     
     try:
@@ -311,28 +311,28 @@ def main():
         else:
             results["Installation"] = False
     except Exception as e:
-        print(f"❌ Build/installation validation error: {e}")
+        print(f"Build/installation validation error: {e}")
         results["Build"] = False
         results["Installation"] = False
     
     # Summary
-    print("\n📋 Validation Summary")
+    print("\nValidation Summary")
     print("=" * 20)
     
     total_checks = len(results)
     passed_checks = sum(1 for result in results.values() if result)
     
     for name, passed in results.items():
-        status = "✅ PASS" if passed else "❌ FAIL"
+        status = "PASS" if passed else "FAIL"
         print(f"{status.ljust(8)} {name}")
     
     print(f"\nResult: {passed_checks}/{total_checks} checks passed")
     
     if passed_checks == total_checks:
-        print("\n🎉 Package validation successful! Ready for PyPI publishing.")
+        print("\nPackage validation successful! Ready for PyPI publishing.")
         
         # Additional publishing tips
-        print("\n📝 Publishing Checklist:")
+        print("\nPublishing Checklist:")
         print("1. Run: python -m build")
         print("2. Test: twine check dist/*")
         print("3. Upload to Test PyPI: twine upload --repository testpypi dist/*")
@@ -340,7 +340,7 @@ def main():
         print("5. Upload to PyPI: twine upload dist/*")
         
     else:
-        print(f"\n⚠️  {total_checks - passed_checks} validation(s) failed.")
+        print(f"\n{total_checks - passed_checks} validation(s) failed.")
         print("Please fix the issues before publishing to PyPI.")
     
     return passed_checks == total_checks

@@ -8,8 +8,8 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Set, Tuple, Union, Iterator, Callable
 from pathlib import Path
 
-# Import Edge for type annotations
-from .core.edge import Edge
+# Edge type - use forward reference to avoid circular import
+Edge = "Edge"
 
 # Basic types
 NodeId = str

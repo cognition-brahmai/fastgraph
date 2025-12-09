@@ -93,6 +93,9 @@ class FastGraph:
         # Optimization: Relation index for fast rel queries
         self._rel_index: Dict[str, List[Edge]] = defaultdict(list)
         
+        # Thread safety - must be initialized before managers that use it
+        self._lock = threading.RLock()
+        
         # Component managers
         self.index_manager = IndexManager(
             auto_index=self.config.get("indexing.auto_index", True)
@@ -102,9 +105,6 @@ class FastGraph:
         
         # Subgraph views (no data duplication)
         self._subgraph_views: Dict[str, SubgraphView] = {}
-        
-        # Thread safety
-        self._lock = threading.RLock()
         
         # Query cache
         self._setup_cache(

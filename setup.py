@@ -17,7 +17,7 @@ with open(os.path.join(this_directory, 'README.md'), encoding='utf-8') as f:
 def read_requirements(filename):
     """Read requirements from file."""
     with open(os.path.join(this_directory, filename), 'r') as f:
-        return [line.strip() for line in f if line.strip() and not line.startswith('#')]
+        return [line.strip() for line in f if line.strip() and not line.startswith('#') and not line.startswith('-r')]
 
 try:
     install_requires = read_requirements('requirements.txt')
