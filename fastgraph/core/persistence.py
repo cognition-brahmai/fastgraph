@@ -37,8 +37,8 @@ class PersistenceManager:
         self.lock = lock
         self._supported_formats = {"msgpack", "pickle", "json"}
     
-    def save(self, graph_data: Dict[str, Any], path: FormatType, 
-             format: str = "msgpack", compress: bool = True) -> None:
+    def save(self, graph_data: Dict[str, Any], path: FormatType,
+             format: str = "msgpack", compress: Optional[bool] = None) -> None:
         """
         Save graph data to file.
         
@@ -46,7 +46,8 @@ class PersistenceManager:
             graph_data: Graph data dictionary
             path: File path to save to
             format: File format ("msgpack", "pickle", "json")
-            compress: Whether to use compression
+            compress: Whether to use compression. If None, defaults to True for
+                     msgpack/pickle formats, False for JSON format (to keep it human-readable)
             
         Raises:
             PersistenceError: If save fails
@@ -54,6 +55,10 @@ class PersistenceManager:
         """
         path = Path(path)
         format = format.lower()
+        
+        # Determine default compression based on format
+        if compress is None:
+            compress = format != "json"  # JSON is human-readable, don't compress by default
         
         if format not in self._supported_formats:
             raise PersistenceError(f"Unsupported format: {format}. Supported formats: {self._supported_formats}",

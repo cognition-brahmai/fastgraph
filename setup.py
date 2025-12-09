@@ -67,7 +67,7 @@ except FileNotFoundError:
 
 setup(
     name='fastgx',
-    version='2.0.4',
+    version='2.0.5',
     description='High-performance in-memory graph database',
     long_description=long_description,
     long_description_content_type='text/markdown',
