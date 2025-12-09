@@ -5,7 +5,46 @@ All notable changes to FastGraph will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.0] - 2024-12-09
+## [2.0.4] - 2025-12-09
+
+### 🔧 Changed
+- Smart compression defaults for different persistence formats:
+  - msgpack/pickle formats: now compress by default
+  - JSON format: no compression by default for human readability
+- Maintains backward compatibility while providing sensible defaults
+
+### 🐛 Fixed
+- **TypeError in gzip file operations**: Fixed compression issues when saving to compressed JSON format
+- Changed from using gzip.GzipFile with fileobj to directly using gzip.open()
+- Updated both save and load operations for consistency
+- Added comprehensive test coverage to prevent regressions
+
+## [2.0.3] - 2025-12-09
+
+### 🗑️ Removed
+- Removed pyproject.toml configuration file
+- Simplified project structure to use setup.py exclusively
+
+### 🔧 Changed
+- Updated README.md with latest project information
+- Streamlined build configuration
+
+## [2.0.2] - 2025-12-09
+
+### 📄 Documentation
+- Added project logo/branding image
+- Updated README.md with improved documentation
+
+## [2.0.1] - 2025-12-09
+
+### 🐛 Fixed
+- **Initialization Issues**: Fixed thread lock initialization order in FastGraph
+- **Import Problems**: Resolved circular import issues by using forward references for Edge type
+- **Validation Errors**: Fixed requirements parsing to ignore include directives in setup.py
+- **Encoding Issues**: Added explicit encoding when reading README.md in validation script
+- Updated validation script to remove emojis and fix installation path
+
+## [2.0.0] - 2025-12-09
 
 ### 🎉 Major Release - Complete Reconstruction
 
@@ -189,5 +228,9 @@ For help with migration:
 
 ## Version History Summary
 
+- **2.0.4**: Smart compression defaults and gzip fixes
+- **2.0.3**: Project structure simplification (removed pyproject.toml)
+- **2.0.2**: Documentation updates and branding
+- **2.0.1**: Initialization, import, and validation fixes
 - **2.0.0**: Complete reconstruction as professional Python package
 - **1.0.0**: Original proof-of-concept implementation
