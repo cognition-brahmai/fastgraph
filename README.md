@@ -1,254 +1,276 @@
 # FastGraph
 
+### *The graph database you build when every other graph database pisses you off.*
+
 [![Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![PyPI Version](https://img.shields.io/badge/pypi-v2.0.0-orange.svg)](https://pypi.org/project/fastgraph/)
-<img src="https://raw.githubusercontent.com/cognition-brahmai/fastgraph/refs/heads/main/4f0acacd709795a384cf33419ef44346.jpg"/>
-FastGraph is a high-performance, in-memory graph database engineered for Python applications that demand speed, low latency, and zero nonsense. Built for developers who want graph operations that actually keep up.
+[![PyPI Version](https://img.shields.io/badge/pypi-fastgx-orange.svg)](https://pypi.org/project/fastgx/)
 
-Created by **BRAHMAI** with ❤️ & ☕.
+<p align="center">
+  <img src="https://raw.githubusercontent.com/cognition-brahmai/fastgraph/refs/heads/main/4f0acacd709795a384cf33419ef44346.jpg" width="700"/>
+</p>
 
----
+<br>
 
-## Key Features
+FastGraph is the **no-BS, in-memory, lightning-fast graph engine** built for developers who are done tolerating slow, bloated, overengineered graph databases.
 
-* High-performance adjacency-list engine with O(1) edge lookups
-* Memory-efficient internals and lightweight subgraph views
-* Automatic and manual indexes for ultra-fast queries
-* JSON/YAML configuration system with sensible defaults
-* Powerful CLI for common graph management tasks
-* Persistence support across msgpack, pickle, and JSON
-* Full thread safety for concurrent read/write workloads
-* Integrated performance monitoring and instrumentation
+This bad boy was born out of pure founder rage and engineered with a single, loud, unapologetic goal:
+
+> **Make graph operations insanely fast and stupidly easy.**
+
+Built by **BRAHMAI**, powered by caffeine, spite, and questionable sleep cycles.
 
 ---
 
-## Quick Start
+# Why FastGraph Exists
 
-### Installation
+Because Neo4j said:
 
-```bash
-pip install fastgx
+> “Here’s one free database. Pay for the second, peasant.”
+
+Because TigerGraph said:
+
+> “Install our entire planet first.”
+
+And because NetworkX said:
+
+> “Bro I’m a toy, please stop putting me in production.”
+
+So we said:
+
+> **“Nah dude… f**k that. We’ll build our own.”**
+
+And we did.
+
+FastGraph is:
+
+* **In-memory**
+* **Blazing fast**
+* **Thread-safe**
+* **Zero setup**
+* **Python-first**
+* **Actually fun to use**
+
+You know… the way a modern graph DB *should* feel.
+
+---
+
+# Headline Features (aka: Why This Slaps)
+
+### **O(1) Edge Lookups**
+
+If you know what you want, FastGraph gives it to you instantly.
+No traversal. No dancing. No Cypher yoga.
+
+### **Smart API v2.0**
+
+Resource management, path resolution, auto-save, auto-load…
+Basically the “don’t make me think” edition.
+
+### **Zero-Copy Subgraph Views**
+
+Slice your graph into meaningful pieces without duplicating a single byte.
+
+### **Smart Persistence**
+
+Files? Formats? Paths?
+FastGraph handles it like your personal assistant.
+
+### **Thread Safety**
+
+Hit it with multiple threads. It doesn’t flinch.
+
+### **Auto Indexing**
+
+Runs fast by default. Runs *stupid* fast when it learns your query patterns.
+
+### **Batch Ops & Optimized Algorithms**
+
+Because if you’re loading millions of nodes one-by-one, you hate yourself.
+
+---
+
+# Quick Start
+
+### *The “I got 10 seconds” version*
+
+```python
+from fastgraph import FastGraph
+
+with FastGraph("my_graph") as graph:
+    graph.add_node("alice", name="Alice", type="Person")
+    graph.add_node("bob", name="Bob", type="Person")
+    graph.add_edge("alice", "bob", "friends", since=2022)
+    # Auto-save on exit. No tears. No drama.
 ```
 
-### Basic Usage
+---
+
+# Traditional API (still sexy)
 
 ```python
 from fastgraph import FastGraph
 
 graph = FastGraph("my_graph")
 
-graph.add_node("alice", name="Alice", age=30, type="Person")
-graph.add_node("bob", name="Bob", age=25, type="Person")
-graph.add_node("company", name="TechCorp", type="Company")
+graph.add_node("alice", name="Alice", age=30)
+graph.add_node("bob", name="Bob", age=25)
+graph.add_edge("alice", "bob", "friends")
 
-graph.add_edge("alice", "bob", "friends", since=2021)
-graph.add_edge("alice", "company", "works_at", role="Engineer")
-graph.add_edge("bob", "company", "works_at", role="Manager")
-
-people = graph.find_nodes(type="Person")
-print(len(people))
-
-friends = graph.neighbors_out("alice", rel="friends")
-print([n for n, edge in friends])
+print(graph.find_nodes(age__gte=25))
+print(graph.neighbors_out("alice", rel="friends"))
 
 graph.save("my_graph.msgpack")
 ```
 
 ---
 
-## Configuration
+# What’s New in v2.0 (TLDR: Everything Got Better)
 
-FastGraph supports JSON/YAML configs for repeatable setups.
+* Zero config mode
+* Auto file discovery
+* Automatic format detection
+* Factory constructors
+* Streaming format conversion
+* Context-manager resource safety
+* Backup & restore
+* Enhanced error handling
+* Smarter defaults everywhere
 
-Example default configuration:
+Basically v2.0 is the "we cleaned up your mess for you" release.
 
-```yaml
-engine:
-  name: "FastGraph"
-  version: "2.0.0"
+---
 
-storage:
-  data_dir: "~/.cache/fastgraph/data"
-  default_format: "msgpack"
-
-memory:
-  query_cache_size: 128
-  cache_ttl: 3600
-
-indexing:
-  auto_index: true
-  default_indexes: ["id", "type", "name"]
-
-performance:
-  thread_pool_size: 4
-  batch_threshold: 100
-
-cli:
-  default_output_format: "table"
-  verbose: false
-```
-
-Usage:
+# Smart Persistence That Just Works
 
 ```python
-from fastgraph import FastGraph
-from fastgraph.config import ConfigManager
+graph = FastGraph("social_graph")
 
-config = ConfigManager("my_config.yaml")
-graph = FastGraph("my_graph", config=config)
+if graph.exists():
+    graph.load()  # Finds the file like magic
+else:
+    graph.save()  # Writes to the right place like it knew all along
+```
+
+Format conversion?
+
+```python
+graph.translate("data.json", "data.msgpack")
+```
+
+Straight-up wizardry.
+
+---
+
+# Factory Constructors (AKA: Less Code, More Power)
+
+```python
+graph = FastGraph.from_file("existing.msgpack")
+graph = FastGraph.load_graph("production_graph")
+graph = FastGraph.with_config({"enhanced_api": True}, "test_graph")
 ```
 
 ---
 
-## CLI Tools
-
-```bash
-fastgraph create --name "social_network"
-fastgraph import data.json --format json --save social.msgpack
-fastgraph export social.msgpack --format json --output export.json
-fastgraph stats social.msgpack --detailed --components
-fastgraph config --show
-fastgraph config --set storage.default_format=json
-```
-
----
-
-## Advanced Capabilities
-
-### Indexing
+# Subgraph Views (Zero Copy)
 
 ```python
-graph.build_node_index("type")
-graph.build_node_index("age")
-
-people = graph.find_nodes(type="Person")
-engineers = graph.find_nodes(role="Engineer")
-
-stats = graph.get_index_stats()
-print(stats["global"]["index_hits"])
-```
-
-### Batch Operations
-
-```python
-graph.add_nodes_batch([
-    ("user1", {"name": "John", "age": 28}),
-    ("user2", {"name": "Jane", "age": 32}),
-    ("user3", {"name": "Bob",  "age": 25})
-])
-
-graph.add_edges_batch([
-    ("user1", "user2", "friends"),
-    ("user2", "user3", "colleagues"),
-    ("user1", "user3", "acquaintances")
-])
-```
-
-### Subgraph Views
-
-```python
-view = graph.create_subgraph_view(
+people = graph.create_subgraph_view(
     "people",
-    lambda nid, attrs: attrs.get("type") == "Person"
+    lambda id, attrs: attrs.get("type") == "Person"
 )
 
-print(view.node_count)
-components = graph.traversal_ops.connected_components()
+print(people.node_count)
 ```
 
-### Traversal Algorithms
+No copying. No overhead. No patience required.
+
+---
+
+# Traversal Ops
 
 ```python
-bfs = graph.traversal_ops.bfs("alice", max_depth=2)
 path = graph.traversal_ops.shortest_path("alice", "bob")
+bfs = graph.traversal_ops.bfs("alice", max_depth=3)
 
-for p in graph.traversal_ops.find_paths("alice", "bob", max_length=3):
+for p in graph.traversal_ops.find_paths("alice", "bob"):
     print(p)
 ```
 
+Your graph. Your rules.
+
 ---
 
-## Performance Monitoring
+# Performance Monitoring (for the nerds)
 
 ```python
 from fastgraph.utils.performance import performance_monitor
 
-@performance_monitor("query_op")
-def q():
-    return graph.find_nodes(type="Person", age__gte=25)
+@performance_monitor("query")
+def run():
+    return graph.find_nodes(type="Person")
 
-monitor = graph.get_performance_monitor()
-print(monitor.get_stats()["query_op"].avg_duration)
+print(graph.get_performance_monitor().get_stats())
 ```
+
+Because real devs measure their flexes.
 
 ---
 
-## Testing
+# CLI That Doesn’t Annoy You
 
 ```bash
-pip install fastgx[dev]
-pytest
-pytest --cov=fastgraph --cov-report=html
+fastgraph create --name social
+fastgraph import data.json --format json
+fastgraph export social.msgpack --format json --output out.json
+fastgraph stats social.msgpack --detailed
+fastgraph config --show
 ```
 
----
-
-## Development
-
-### Setup
-
-```bash
-git clone https://github.com/cognition-brahmai/fastgraph.git
-cd fastgraph
-pip install -e ".[dev]"
-pre-commit install
-```
-
-### Quality
-
-```bash
-black fastgraph tests examples
-flake8 fastgraph tests examples
-mypy fastgraph
-pre-commit run --all-files
-```
+Neo4j cries reading this simplicity.
 
 ---
 
-## Benchmarks
+# Benchmarks (a taste)
 
-FastGraph is tuned for high throughput and low latency.
+| Operation        | Complexity |
+| ---------------- | ---------- |
+| Node lookup      | O(1)       |
+| Edge lookup      | O(1)       |
+| Neighbor scan    | O(degree)  |
+| Indexed query    | O(log n)   |
+| Batch operations | O(n)       |
 
-| Operation      | Complexity |
-| -------------- | ---------- |
-| Node lookup    | O(1)       |
-| Edge lookup    | O(1)       |
-| Neighbor query | O(degree)  |
-| Indexed search | O(log n)   |
-| Batch inserts  | O(n)       |
-
-Detailed benchmarks live in `benchmarks/`.
-
----
-
-## Contributing
-
-1. Fork the repo
-2. Create a branch
-3. Commit your changes
-4. Push and open a PR
-
-We keep contributions simple and frictionless.
+This thing is FAST, bro.
+You’ll feel it.
 
 ---
 
-## License
+# Contributing
 
-MIT. See the LICENSE file.
+Fork it. Clone it. Break it. Improve it. PR it.
+We don’t gatekeep.
 
 ---
 
-## Acknowledgments
+# Credits
 
-FastGraph builds on proven graph database principles and a relentless focus on performance and developer experience. Thanks to all contributors and the Python ecosystem that made it possible.
+Made by **BRAHMAI**.
+Fueled by caffeine, frustration, and the existential need for a graph engine that doesn’t suck.
+
+---
+
+# Final Words
+
+FastGraph isn’t trying to compete with legacy databases.
+
+FastGraph is the **"shut up and give me speed"** graph engine for:
+
+* Agents
+* LLMs
+* Memory systems
+* Recommenders
+* Knowledge graphs
+* Your unhinged 3 AM ideas
+
+If your app deserves fast relationships, FastGraph deserves to be in it.

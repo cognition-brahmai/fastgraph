@@ -34,7 +34,13 @@ def get_default_config() -> Dict[str, Any]:
             "default_format": "msgpack",
             "backup_enabled": True,
             "backup_interval": 3600,  # seconds
-            "max_backup_files": 5
+            "max_backup_files": 5,
+            "auto_create_directories": True,
+            "backup_directory": _expand_path("~/.fastgraph/backups/"),
+            "max_backups": 5,
+            "compression_default": True,
+            "atomic_writes": True,
+            "default_directory": _expand_path("~/.fastgraph/graphs/")
         },
         
         "memory": {
@@ -89,6 +95,38 @@ def get_default_config() -> Dict[str, Any]:
             "port": 8080,
             "max_connections": 10,
             "timeout": 30
+        },
+        
+        "enhanced_api": {
+            "auto_save": False,
+            "auto_cleanup": True,
+            "format_detection": True,
+            "path_resolution": True,
+            "atomic_operations": True,
+            "smart_defaults": True,
+            "auto_discovery": True,
+            "fallback_mechanisms": True
+        },
+        
+        "resource_management": {
+            "max_open_graphs": 10,
+            "memory_limit_per_graph": "100MB",
+            "cleanup_interval": 300,  # seconds
+            "backup_on_close": False,
+            "auto_cleanup": True,
+            "memory_monitoring": True,
+            "resource_tracking": True
+        },
+        
+        "persistence": {
+            "default_directory": _expand_path("~/.fastgraph/graphs/"),
+            "auto_create_directories": True,
+            "backup_directory": _expand_path("~/.fastgraph/backups/"),
+            "max_backups": 5,
+            "compression_default": True,
+            "atomic_writes": True,
+            "format_detection": True,
+            "path_resolution": True
         }
     }
 
@@ -201,6 +239,50 @@ def get_config_schema() -> Dict[str, Any]:
                 "port": {"type": "integer", "min": 1024, "max": 65535, "default": 8080},
                 "max_connections": {"type": "integer", "min": 1, "max": 1000, "default": 10},
                 "timeout": {"type": "integer", "min": 1, "default": 30}
+            }
+        },
+        
+        "enhanced_api": {
+            "type": "dict",
+            "required": True,
+            "properties": {
+                "auto_save": {"type": "boolean", "default": False},
+                "auto_cleanup": {"type": "boolean", "default": True},
+                "format_detection": {"type": "boolean", "default": True},
+                "path_resolution": {"type": "boolean", "default": True},
+                "atomic_operations": {"type": "boolean", "default": True},
+                "smart_defaults": {"type": "boolean", "default": True},
+                "auto_discovery": {"type": "boolean", "default": True},
+                "fallback_mechanisms": {"type": "boolean", "default": True}
+            }
+        },
+        
+        "resource_management": {
+            "type": "dict",
+            "required": True,
+            "properties": {
+                "max_open_graphs": {"type": "integer", "min": 1, "max": 100, "default": 10},
+                "memory_limit_per_graph": {"type": "string", "default": "100MB"},
+                "cleanup_interval": {"type": "integer", "min": 10, "default": 300},
+                "backup_on_close": {"type": "boolean", "default": False},
+                "auto_cleanup": {"type": "boolean", "default": True},
+                "memory_monitoring": {"type": "boolean", "default": True},
+                "resource_tracking": {"type": "boolean", "default": True}
+            }
+        },
+        
+        "persistence": {
+            "type": "dict",
+            "required": True,
+            "properties": {
+                "default_directory": {"type": "string", "default": "~/.fastgraph/graphs/"},
+                "auto_create_directories": {"type": "boolean", "default": True},
+                "backup_directory": {"type": "string", "default": "~/.fastgraph/backups/"},
+                "max_backups": {"type": "integer", "min": 1, "default": 5},
+                "compression_default": {"type": "boolean", "default": True},
+                "atomic_writes": {"type": "boolean", "default": True},
+                "format_detection": {"type": "boolean", "default": True},
+                "path_resolution": {"type": "boolean", "default": True}
             }
         }
     }

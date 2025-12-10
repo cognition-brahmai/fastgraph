@@ -2,13 +2,15 @@
 Persistence operations for FastGraph
 
 This module handles saving and loading graph data in various formats
-with support for compression and streaming operations.
+with support for compression and streaming operations, enhanced with
+automatic path resolution and format detection.
 """
 
 import pickle
 import json
 import msgpack
-from typing import Any, Dict, List, Optional, Union
+import logging
+from typing import Any, Dict, List, Optional, Union, Tuple
 from pathlib import Path
 import time
 import threading
@@ -19,23 +21,46 @@ from ..exceptions import PersistenceError
 from .edge import Edge
 
 
+logger = logging.getLogger(__name__)
+
+
 class PersistenceManager:
     """
     Handles graph persistence operations with multiple format support.
     
     Supports saving and loading graphs in various formats with compression,
-    streaming for large graphs, and thread safety.
+    streaming for large graphs, thread safety, and enhanced features like
+    automatic path resolution and format detection.
     """
     
-    def __init__(self, lock):
+    def __init__(self, lock, config: Optional[Dict[str, Any]] = None):
         """
         Initialize persistence manager.
         
         Args:
             lock: Threading lock for thread-safe operations
+            config: Configuration dictionary for enhanced features
         """
         self.lock = lock
+        self.config = config or {}
         self._supported_formats = {"msgpack", "pickle", "json"}
+        
+        # Enhanced features
+        enhanced_api = self.config.get("enhanced_api", {})
+        if isinstance(enhanced_api, dict):
+            self._enhanced_enabled = enhanced_api.get("path_resolution", True)
+        else:
+            self._enhanced_enabled = bool(enhanced_api)
+        
+        if self._enhanced_enabled:
+            from ..utils.path_resolver import PathResolver
+            from ..utils.resource_manager import ResourceManager
+            
+            self._path_resolver = PathResolver(self.config)
+            self._resource_manager = ResourceManager(self.config)
+        else:
+            self._path_resolver = None
+            self._resource_manager = None
     
     def save(self, graph_data: Dict[str, Any], path: FormatType,
              format: str = "msgpack", compress: Optional[bool] = None) -> None:
@@ -220,10 +245,22 @@ class PersistenceManager:
         
         try:
             yield temp_path
+            # Remove existing file if it exists (Windows compatibility)
+            if path.exists():
+                try:
+                    path.unlink()
+                except PermissionError:
+                    # File might be locked, try to rename with timestamp
+                    import time
+                    backup_path = path.with_suffix(f"{path.suffix}.bak.{int(time.time())}")
+                    path.rename(backup_path)
             temp_path.rename(path)
         except Exception:
             if temp_path.exists():
-                temp_path.unlink()
+                try:
+                    temp_path.unlink()
+                except PermissionError:
+                    pass  # Ignore cleanup errors on Windows
             raise
     
     def _prepare_save_data(self, graph_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -502,10 +539,259 @@ class PersistenceManager:
                     return key.lower() == 'true'
                 return key
     
+    def save_auto(self, graph_data: Dict[str, Any], path_hint: Optional[str] = None,
+                  graph_name: Optional[str] = None, format: Optional[str] = None,
+                  **kwargs) -> Path:
+        """
+        Save graph data with automatic path resolution and format detection.
+        
+        Args:
+            graph_data: Graph data dictionary
+            path_hint: Optional path hint for file location
+            graph_name: Name of the graph for auto-naming
+            format: Optional format override
+            **kwargs: Additional arguments for save operation
+            
+        Returns:
+            Path where the graph was saved
+            
+        Raises:
+            PersistenceError: If save operation fails
+        """
+        if not self._enhanced_enabled:
+            raise PersistenceError("Enhanced features not enabled. Set enhanced_api.path_resolution=True")
+        
+        try:
+            # Resolve path automatically
+            if path_hint or graph_name:
+                resolved_path = self._path_resolver.resolve_path(path_hint, graph_name, format)
+            else:
+                resolved_path = self._path_resolver.get_default_path(
+                    graph_name or "graph", format
+                )
+            
+            # Detect format if not specified
+            if not format:
+                format = self._path_resolver.detect_format(resolved_path)
+                if not format:
+                    format = self.config.get("storage", {}).get("default_format", "msgpack")
+            
+            # Ensure directory exists
+            self._path_resolver.ensure_directory(resolved_path)
+            
+            # Use atomic write if enabled
+            atomic_writes = self.config.get("persistence", {}).get("atomic_writes", True)
+            if atomic_writes:
+                with self.atomic_write(resolved_path) as temp_path:
+                    self.save(graph_data, temp_path, format, **kwargs)
+            else:
+                self.save(graph_data, resolved_path, format, **kwargs)
+            
+            logger.info(f"Auto-saved graph to {resolved_path}")
+            return resolved_path
+            
+        except Exception as e:
+            raise PersistenceError(f"Auto-save failed: {e}", operation="save_auto")
+    
+    def load_auto(self, path_hint: Optional[str] = None, graph_name: Optional[str] = None,
+                  format: Optional[str] = None, **kwargs) -> Tuple[Dict[str, Any], Path]:
+        """
+        Load graph data with automatic path resolution and format detection.
+        
+        Args:
+            path_hint: Optional path hint for file location
+            graph_name: Name of the graph to search for
+            format: Optional format override
+            **kwargs: Additional arguments for load operation
+            
+        Returns:
+            Tuple of (loaded_graph_data, actual_path)
+            
+        Raises:
+            PersistenceError: If load operation fails
+        """
+        if not self._enhanced_enabled:
+            raise PersistenceError("Enhanced features not enabled. Set enhanced_api.path_resolution=True")
+        
+        try:
+            resolved_path = None
+            
+            # Try different resolution strategies
+            if path_hint:
+                # Direct path resolution
+                resolved_path = self._path_resolver.resolve_path(path_hint, graph_name, format)
+                if not resolved_path.exists():
+                    resolved_path = None
+            elif graph_name:
+                # Search for graph file by name
+                resolved_path = self._path_resolver.find_graph_file(graph_name)
+            
+            # If still not found, try default locations
+            if not resolved_path or not resolved_path.exists():
+                if graph_name:
+                    resolved_path = self._path_resolver.get_default_path(graph_name, format)
+                    if not resolved_path.exists():
+                        resolved_path = None
+            
+            if not resolved_path or not resolved_path.exists():
+                raise PersistenceError(f"Graph file not found for path_hint={path_hint}, graph_name={graph_name}",
+                                    operation="load_auto")
+            
+            # Detect format if not specified
+            if not format:
+                format = self._path_resolver.detect_format(resolved_path)
+                if not format:
+                    format = self.config.get("storage", {}).get("default_format", "msgpack")
+            
+            # Load the data
+            graph_data = self.load(resolved_path, format, **kwargs)
+            
+            logger.info(f"Auto-loaded graph from {resolved_path}")
+            return graph_data, resolved_path
+            
+        except Exception as e:
+            raise PersistenceError(f"Auto-load failed: {e}", operation="load_auto")
+    
+    def backup(self, graph_data: Dict[str, Any], name: str,
+               backup_dir: Optional[Path] = None) -> List[Path]:
+        """
+        Create backup(s) of graph data.
+        
+        Args:
+            graph_data: Graph data dictionary
+            name: Base name for backup files
+            backup_dir: Optional backup directory override
+            
+        Returns:
+            List of paths to created backup files
+            
+        Raises:
+            PersistenceError: If backup operation fails
+        """
+        if not self._enhanced_enabled:
+            raise PersistenceError("Enhanced features not enabled")
+        
+        try:
+            # Determine backup directory
+            if not backup_dir:
+                backup_dir = Path(self.config.get("persistence", {}).get("backup_directory",
+                                                                       "~/.fastgraph/backups/"))
+            backup_dir = backup_dir.expanduser()
+            
+            # Ensure backup directory exists
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Get backup settings
+            max_backups = self.config.get("persistence", {}).get("max_backups", 5)
+            formats = self.config.get("security", {}).get("allowed_serialization_formats",
+                                                         ["msgpack", "pickle", "json"])
+            
+            backup_paths = []
+            timestamp = int(time.time())
+            
+            # Create backups in different formats
+            for format in formats:
+                backup_name = f"{name}_{timestamp}.{format}"
+                backup_path = backup_dir / backup_name
+                
+                # Save backup
+                self.save(graph_data, backup_path, format)
+                backup_paths.append(backup_path)
+            
+            # Cleanup old backups
+            self._cleanup_old_backups(name, backup_dir, max_backups)
+            
+            logger.info(f"Created {len(backup_paths)} backups for {name}")
+            return backup_paths
+            
+        except Exception as e:
+            raise PersistenceError(f"Backup failed: {e}", operation="backup")
+    
+    def restore_from_backup(self, name: str, backup_dir: Optional[Path] = None,
+                           format: Optional[str] = None) -> Tuple[Dict[str, Any], Path]:
+        """
+        Restore graph data from the most recent backup.
+        
+        Args:
+            name: Name of the graph to restore
+            backup_dir: Optional backup directory override
+            format: Optional format preference
+            
+        Returns:
+            Tuple of (restored_graph_data, backup_path)
+            
+        Raises:
+            PersistenceError: If restore operation fails
+        """
+        if not self._enhanced_enabled:
+            raise PersistenceError("Enhanced features not enabled")
+        
+        try:
+            # Determine backup directory
+            if not backup_dir:
+                backup_dir = Path(self.config.get("persistence", {}).get("backup_directory",
+                                                                       "~/.fastgraph/backups/"))
+            backup_dir = backup_dir.expanduser()
+            
+            # Find most recent backup
+            backup_path = self._find_latest_backup(name, backup_dir, format)
+            if not backup_path:
+                raise PersistenceError(f"No backup found for graph: {name}", operation="restore")
+            
+            # Detect format and load
+            detected_format = self._path_resolver.detect_format(backup_path)
+            graph_data = self.load(backup_path, detected_format)
+            
+            logger.info(f"Restored {name} from backup {backup_path}")
+            return graph_data, backup_path
+            
+        except Exception as e:
+            raise PersistenceError(f"Restore failed: {e}", operation="restore")
+    
+    def _cleanup_old_backups(self, name: str, backup_dir: Path, max_backups: int) -> None:
+        """Clean up old backup files, keeping only the most recent ones."""
+        try:
+            # Find all backup files for this name
+            backup_pattern = f"{name}_*"
+            backup_files = list(backup_dir.glob(backup_pattern))
+            
+            # Sort by modification time (newest first)
+            backup_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            
+            # Remove excess backups
+            for backup_file in backup_files[max_backups:]:
+                backup_file.unlink()
+                logger.debug(f"Removed old backup: {backup_file}")
+                
+        except Exception as e:
+            logger.warning(f"Failed to cleanup old backups: {e}")
+    
+    def _find_latest_backup(self, name: str, backup_dir: Path,
+                           format: Optional[str] = None) -> Optional[Path]:
+        """Find the most recent backup for a graph."""
+        try:
+            backup_pattern = f"{name}_*"
+            if format:
+                backup_pattern += f".{format}"
+            
+            backup_files = list(backup_dir.glob(backup_pattern))
+            
+            if not backup_files:
+                return None
+            
+            # Return the most recently modified
+            latest = max(backup_files, key=lambda p: p.stat().st_mtime)
+            return latest
+            
+        except Exception as e:
+            logger.warning(f"Failed to find latest backup: {e}")
+            return None
+    
     def get_supported_formats(self) -> List[str]:
         """Get list of supported formats."""
         return list(self._supported_formats)
     
     def __repr__(self) -> str:
         """String representation."""
-        return f"PersistenceManager(formats={self._supported_formats})"
+        enhanced = "enhanced" if self._enhanced_enabled else "basic"
+        return f"PersistenceManager({enhanced}, formats={self._supported_formats})"

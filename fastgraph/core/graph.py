@@ -8,6 +8,7 @@ components into a high-performance in-memory graph database.
 from __future__ import annotations
 import time
 import threading
+import logging
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Set, Tuple, Iterator, Callable, Union
 from pathlib import Path
@@ -27,6 +28,8 @@ from .subgraph import SubgraphView
 from .indexing import IndexManager
 from .traversal import TraversalOperations
 from .persistence import PersistenceManager
+from ..utils.path_resolver import PathResolver
+from ..utils.resource_manager import ResourceManager
 
 
 class FastGraph:
@@ -47,7 +50,7 @@ class FastGraph:
     def __init__(self, name: str = "fastgraph", config: Union[str, Path, Dict, ConfigManager] = None,
                  **kwargs):
         """
-        Initialize FastGraph instance.
+        Initialize FastGraph instance with enhanced features.
         
         Args:
             name: Graph name for identification
@@ -66,12 +69,18 @@ class FastGraph:
             
             # Using direct parameters
             graph = FastGraph(name="my_graph", auto_index=True, cache_size=128)
+            
+            # Enhanced features
+            graph = FastGraph(name="my_graph", enhanced_api=True)
         """
         # Load configuration
         self.config = self._load_config(config, kwargs)
         
         # Initialize core attributes
         self.name = name or self.config.get("engine.name", "fastgraph")
+        
+        # Enhanced features flag
+        self._enhanced_enabled = self.config.get("enhanced_api.enabled", False)
         
         # Core storage
         self.graph: Dict[str, Any] = {
@@ -101,7 +110,18 @@ class FastGraph:
             auto_index=self.config.get("indexing.auto_index", True)
         )
         self.traversal_ops = TraversalOperations(self)
-        self.persistence_manager = PersistenceManager(self._lock)
+        self.persistence_manager = PersistenceManager(self._lock, self.config)
+        
+        # Enhanced components
+        if self._enhanced_enabled:
+            self._path_resolver = PathResolver(self.config)
+            self._resource_manager = ResourceManager(self.config)
+            # Register this graph with resource manager
+            self._graph_id = self._resource_manager.register_graph(self, self.name)
+        else:
+            self._path_resolver = None
+            self._resource_manager = None
+            self._graph_id = None
         
         # Subgraph views (no data duplication)
         self._subgraph_views: Dict[str, SubgraphView] = {}
@@ -121,7 +141,7 @@ class FastGraph:
             "cache_misses": 0
         }
     
-    def _load_config(self, config: Union[str, Path, Dict, ConfigManager], 
+    def _load_config(self, config: Union[str, Path, Dict, ConfigManager],
                     overrides: Dict) -> ConfigManager:
         """
         Load and process configuration.
@@ -145,7 +165,12 @@ class FastGraph:
         # Apply parameter overrides
         if overrides:
             for key, value in overrides.items():
-                cfg_manager.set(key, value)
+                # Handle boolean overrides specially
+                if key == "enhanced_api" and isinstance(value, bool):
+                    # Convert to dict format for internal consistency
+                    cfg_manager.set("enhanced_api.enabled", value)
+                else:
+                    cfg_manager.set(key, value)
         
         return cfg_manager
     
@@ -635,14 +660,29 @@ class FastGraph:
     
     # ==================== PERSISTENCE ====================
     
-    def save(self, path: Union[str, Path], format: str = "msgpack") -> None:
+    def save(self, path: Optional[Union[str, Path]] = None, format: Optional[str] = None, **kwargs) -> Union[Path, None]:
         """
-        Save graph with compression.
+        Save graph with enhanced features and smart defaults.
         
         Args:
-            path: File path to save to
-            format: File format ("msgpack", "pickle", "json")
+            path: File path to save to (auto-resolved if None and enhanced API enabled)
+            format: File format ("msgpack", "pickle", "json") - auto-detected if None
+            **kwargs: Additional save options
+            
+        Returns:
+            Path where graph was saved (if enhanced API enabled)
+            
+        Example:
+            # Basic usage
+            graph.save("my_graph.msgpack")
+            
+            # Enhanced - auto-resolve path and format
+            graph.save()  # Saves to default location with default format
+            
+            # With path hint
+            graph.save("data/my_graph")  # Auto-resolves format and path
         """
+        # Prepare data
         data = {
             "nodes": self.graph["nodes"],
             "_edges": self._edges,
@@ -650,18 +690,116 @@ class FastGraph:
             "node_indexes": self.index_manager.node_indexes
         }
         
-        self.persistence_manager.save(data, path, format)
+        # Enhanced save with auto-resolution
+        if self._enhanced_enabled and self._path_resolver:
+            if path is None:
+                # Use auto-resolution
+                saved_path = self.persistence_manager.save_auto(
+                    data, None, self.name, format, **kwargs
+                )
+                return saved_path
+            else:
+                # Path provided - try enhanced resolution
+                try:
+                    resolved_path = self._path_resolver.resolve_path(path, self.name, format)
+                    if not format:
+                        format = self._path_resolver.detect_format(resolved_path) or "msgpack"
+                    
+                    self.persistence_manager.save(data, resolved_path, format, **kwargs)
+                    return resolved_path
+                except Exception:
+                    # Fallback to basic save
+                    if not format:
+                        format = self.config.get("storage.default_format", "msgpack")
+                    self.persistence_manager.save(data, path, format, **kwargs)
+                    return Path(path)
+        else:
+            # Basic save
+            if not format:
+                format = self.config.get("storage.default_format", "msgpack")
+            if path is None:
+                raise PersistenceError("Path required when enhanced API is disabled",
+                                    operation="save")
+            self.persistence_manager.save(data, path, format, **kwargs)
+            return None
     
-    def load(self, path: Union[str, Path], format: str = "msgpack") -> None:
+    def load(self, path: Optional[Union[str, Path]] = None, format: Optional[str] = None, **kwargs) -> Union[Path, None]:
         """
-        Load graph from file.
+        Load graph with automatic format detection and path resolution.
         
         Args:
-            path: File path to load from
-            format: File format
+            path: File path to load from (auto-resolved if None and enhanced API enabled)
+            format: File format (auto-detected if None)
+            **kwargs: Additional load options
+            
+        Returns:
+            Path where graph was loaded from (if enhanced API enabled)
+            
+        Example:
+            # Basic usage
+            graph.load("my_graph.msgpack")
+            
+            # Enhanced - auto-discover and load
+            graph.load()  # Auto-discovers graph file
+            
+            # Load by name
+            graph.load(graph_name="my_graph")  # Searches for graph file
         """
-        data = self.persistence_manager.load(path, format)
-        
+        # Enhanced load with auto-resolution
+        if self._enhanced_enabled and self._path_resolver:
+            try:
+                if path is None:
+                    # Auto-discover graph file
+                    graph_data, loaded_path = self.persistence_manager.load_auto(
+                        None, self.name, format, **kwargs
+                    )
+                else:
+                    # Path provided - try enhanced resolution
+                    if isinstance(path, str) and not Path(path).exists():
+                        # Might be a graph name
+                        graph_data, loaded_path = self.persistence_manager.load_auto(
+                            path, None, format, **kwargs
+                        )
+                    else:
+                        # Direct path
+                        if not format:
+                            format = self._path_resolver.detect_format(path) or "msgpack"
+                        graph_data = self.persistence_manager.load(path, format, **kwargs)
+                        loaded_path = Path(path)
+                
+                # Load the data into current graph
+                self._load_data_into_graph(graph_data)
+                
+                # Update resource manager
+                if self._resource_manager and self._graph_id:
+                    self._resource_manager.update_access_time(self._graph_id)
+                
+                return loaded_path
+                
+            except Exception as e:
+                # Fallback to basic load
+                if path and format:
+                    try:
+                        graph_data = self.persistence_manager.load(path, format, **kwargs)
+                        self._load_data_into_graph(graph_data)
+                        return Path(path)
+                    except Exception:
+                        raise PersistenceError(f"Failed to load graph: {e}", operation="load")
+                else:
+                    raise PersistenceError(f"Failed to load graph: {e}", operation="load")
+        else:
+            # Basic load
+            if path is None:
+                raise PersistenceError("Path required when enhanced API is disabled",
+                                    operation="load")
+            if not format:
+                format = self.config.get("storage.default_format", "msgpack")
+            graph_data = self.persistence_manager.load(path, format, **kwargs)
+            self._load_data_into_graph(graph_data)
+            return Path(path)
+    
+    def _load_data_into_graph(self, data: Dict[str, Any]) -> None:
+        """Helper method to load data into current graph instance."""
         # Clear current state
         self.clear()
         
@@ -675,6 +813,373 @@ class FastGraph:
         
         # Rebuild indexes
         self.index_manager.node_indexes = data.get("indexes", {})
+    
+    def exists(self, path_hint: Optional[Union[str, Path]] = None) -> bool:
+        """
+        Check if a graph file exists.
+        
+        Args:
+            path_hint: Optional path hint or graph name to check
+            
+        Returns:
+            True if graph file exists, False otherwise
+            
+        Example:
+            if graph.exists():
+                print("Graph file exists")
+                
+            if graph.exists("my_graph"):
+                print("Graph 'my_graph' exists")
+        """
+        if not self._enhanced_enabled or not self._path_resolver:
+            # Basic check
+            if path_hint:
+                return Path(path_hint).exists()
+            return False
+        
+        # Enhanced existence check
+        if path_hint:
+            if isinstance(path_hint, str) and not Path(path_hint).exists():
+                # Try to find by name
+                found_path = self._path_resolver.find_graph_file(path_hint)
+                return found_path is not None and found_path.exists()
+            else:
+                return Path(path_hint).exists()
+        else:
+            # Check default location for this graph
+            default_path = self._path_resolver.get_default_path(self.name)
+            return default_path.exists()
+    
+    def translate(self, source_path: Union[str, Path], target_path: Union[str, Path],
+                  source_format: Optional[str] = None, target_format: str = "msgpack",
+                  **kwargs) -> Path:
+        """
+        Convert graph file from one format to another.
+        
+        Args:
+            source_path: Source file path
+            target_path: Target file path
+            source_format: Source format (auto-detected if None)
+            target_format: Target format
+            **kwargs: Additional options
+            
+        Returns:
+            Path to the converted file
+            
+        Example:
+            # Convert JSON to msgpack
+            graph.translate("data.json", "data.msgpack", "json", "msgpack")
+            
+            # Auto-detect source and convert to msgpack
+            graph.translate("data.json", "data.msgpack", target_format="msgpack")
+        """
+        if not self._enhanced_enabled or not self._path_resolver:
+            raise PersistenceError("Format translation requires enhanced API to be enabled",
+                                operation="translate")
+        
+        source_path = Path(source_path)
+        target_path = Path(target_path)
+        
+        # Detect source format if not specified
+        if not source_format:
+            source_format = self._path_resolver.detect_format(source_path)
+            if not source_format:
+                raise PersistenceError(f"Cannot detect source format for {source_path}",
+                                    operation="translate")
+        
+        # Load source data
+        source_data = self.persistence_manager.load(source_path, source_format, **kwargs)
+        
+        # Save in target format
+        self.persistence_manager.save(source_data, target_path, target_format, **kwargs)
+        
+        return target_path
+    
+    def get_translation(self, source_path: Union[str, Path], target_format: str,
+                       output_dir: Optional[Union[str, Path]] = None) -> Path:
+        """
+        Extract graph data from a file and convert it to a different format.
+        
+        Args:
+            source_path: Source file path
+            target_format: Target format for extraction
+            output_dir: Optional output directory (auto-resolved if None)
+            
+        Returns:
+            Path to the extracted file
+            
+        Example:
+            # Extract data from JSON to msgpack
+            extracted_path = graph.get_translation("data.json", "msgpack")
+        """
+        if not self._enhanced_enabled or not self._path_resolver:
+            raise PersistenceError("Format extraction requires enhanced API to be enabled",
+                                operation="get_translation")
+        
+        source_path = Path(source_path)
+        
+        # Determine output path
+        if output_dir:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            target_path = output_dir / f"{source_path.stem}.{target_format}"
+        else:
+            target_path = source_path.parent / f"{source_path.stem}.{target_format}"
+        
+        # Perform translation
+        return self.translate(source_path, target_path, None, target_format)
+    
+    # ==================== FACTORY METHODS ====================
+    
+    @classmethod
+    def from_file(cls, path: Union[str, Path], format: Optional[str] = None,
+                  config: Optional[Union[str, Path, Dict, ConfigManager]] = None,
+                  **kwargs) -> 'FastGraph':
+        """
+        Create FastGraph instance from existing file.
+        
+        Args:
+            path: Path to graph file
+            format: File format (auto-detected if None)
+            config: Optional configuration
+            **kwargs: Additional parameters
+            
+        Returns:
+            FastGraph instance loaded with data from file
+            
+        Example:
+            graph = FastGraph.from_file("my_graph.msgpack")
+            graph = FastGraph.from_file("data.json", config={"enhanced_api": {"enabled": True}})
+        """
+        # Create instance
+        instance = cls(config=config, **kwargs)
+        
+        # Load data
+        instance.load(path, format)
+        
+        return instance
+    
+    @classmethod
+    def load_graph(cls, path_hint: Optional[Union[str, Path]] = None,
+                   graph_name: Optional[str] = None,
+                   config: Optional[Union[str, Path, Dict, ConfigManager]] = None,
+                   **kwargs) -> 'FastGraph':
+        """
+        Factory method to load existing graph with enhanced discovery.
+        
+        Args:
+            path_hint: Optional path hint for graph file
+            graph_name: Name of graph to search for
+            config: Optional configuration
+            **kwargs: Additional parameters
+            
+        Returns:
+            FastGraph instance loaded with data
+            
+        Example:
+            # Load from specific file
+            graph = FastGraph.load_graph("my_graph.msgpack")
+            
+            # Auto-discover by name
+            graph = FastGraph.load_graph(graph_name="my_graph")
+            
+            # Auto-discover any graph
+            graph = FastGraph.load_graph()
+        """
+        # Create instance with enhanced features enabled
+        if config is None:
+            config = {"enhanced_api": {"enabled": True}}
+        elif isinstance(config, dict):
+            config = {"enhanced_api": {"enabled": True}, **config}
+        
+        instance = cls(config=config, **kwargs)
+        
+        # Load data
+        if path_hint or graph_name:
+            # Call instance load method directly
+            instance.load(path_hint, **kwargs)
+        else:
+            # Try to auto-discover
+            if instance._enhanced_enabled and instance._path_resolver:
+                # Try to find any graph file in default locations
+                if instance.name:
+                    instance.load(graph_name=instance.name, **kwargs)
+                else:
+                    raise PersistenceError("Cannot auto-discover graph without name or path",
+                                        operation="load")
+            else:
+                raise PersistenceError("Path or graph name required when enhanced API is disabled",
+                                    operation="load")
+        
+        return instance
+    
+    @classmethod
+    def with_config(cls, config: Union[str, Path, Dict, ConfigManager],
+                   name: Optional[str] = None, **kwargs) -> 'FastGraph':
+        """
+        Create FastGraph instance with specific configuration.
+        
+        Args:
+            config: Configuration source
+            name: Optional graph name
+            **kwargs: Additional configuration overrides
+            
+        Returns:
+            FastGraph instance with specified configuration
+            
+        Example:
+            config = {"enhanced_api": {"enabled": True}, "memory": {"query_cache_size": 256}}
+            graph = FastGraph.with_config(config, name="my_graph")
+        """
+        return cls(name=name, config=config, **kwargs)
+    
+    # ==================== CONTEXT MANAGER ====================
+    
+    def __enter__(self):
+        """
+        Context manager entry.
+        
+        Returns:
+            Self for context usage
+            
+        Example:
+            with FastGraph(name="temp_graph") as graph:
+                graph.add_node("A", name="Alice")
+                graph.add_node("B", name="Bob")
+                graph.add_edge("A", "B", "knows")
+                # Auto-save and cleanup on exit
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Update resource manager access time
+        if self._resource_manager and self._graph_id:
+            self._resource_manager.update_access_time(self._graph_id)
+        
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """
+        Context manager exit with automatic cleanup.
+        
+        Args:
+            exc_type: Exception type (if any)
+            exc_val: Exception value (if any)
+            exc_tb: Exception traceback (if any)
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            # Auto-save if enabled and no exception occurred
+            if exc_type is None and self._enhanced_enabled:
+                auto_save = self.config.get("persistence", {}).get("auto_save_on_exit", False)
+                if auto_save:
+                    try:
+                        self.save()
+                    except Exception as e:
+                        logger.warning(f"Auto-save failed on context exit: {e}")
+            
+            # Cleanup resources
+            if self._resource_manager and self._graph_id:
+                self._resource_manager.unregister_graph(self._graph_id)
+                
+        except Exception as e:
+            logger.error(f"Error during context manager cleanup: {e}")
+        
+        # Don't suppress exceptions
+        return False
+    
+    def cleanup(self) -> None:
+        """
+        Explicit cleanup method for resource management.
+        
+        This method should be called when the graph instance is no longer needed
+        to ensure proper resource cleanup, especially when not using context manager.
+        
+        Example:
+            graph = FastGraph()
+            # ... use graph ...
+            graph.cleanup()  # Explicit cleanup
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            # Save if auto-save is enabled
+            if self._enhanced_enabled:
+                auto_save = self.config.get("persistence", {}).get("auto_save_on_cleanup", False)
+                if auto_save:
+                    try:
+                        self.save()
+                    except Exception as e:
+                        logger.warning(f"Auto-save failed during cleanup: {e}")
+            
+            # Unregister from resource manager
+            if self._resource_manager and self._graph_id:
+                self._resource_manager.unregister_graph(self._graph_id)
+                self._graph_id = None
+                
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+    
+    def backup(self, backup_dir: Optional[Path] = None) -> List[Path]:
+        """
+        Create backup(s) of the current graph.
+        
+        Args:
+            backup_dir: Optional backup directory override
+            
+        Returns:
+            List of paths to created backup files
+            
+        Example:
+            backup_paths = graph.backup()
+            print(f"Created backups: {backup_paths}")
+        """
+        if not self._enhanced_enabled:
+            raise PersistenceError("Backup requires enhanced API to be enabled",
+                                operation="backup")
+        
+        # Prepare data
+        data = {
+            "nodes": self.graph["nodes"],
+            "_edges": self._edges,
+            "metadata": self.graph["metadata"],
+            "node_indexes": self.index_manager.node_indexes
+        }
+        
+        return self.persistence_manager.backup(data, self.name, backup_dir)
+    
+    def restore_from_backup(self, backup_dir: Optional[Path] = None,
+                           format: Optional[str] = None) -> Path:
+        """
+        Restore graph from the most recent backup.
+        
+        Args:
+            backup_dir: Optional backup directory override
+            format: Optional format preference
+            
+        Returns:
+            Path to the backup file that was restored
+            
+        Example:
+            backup_path = graph.restore_from_backup()
+            print(f"Restored from: {backup_path}")
+        """
+        if not self._enhanced_enabled:
+            raise PersistenceError("Restore requires enhanced API to be enabled",
+                                operation="restore")
+        
+        # Restore data
+        graph_data, backup_path = self.persistence_manager.restore_from_backup(
+            self.name, backup_dir, format
+        )
+        
+        # Load into current graph
+        self._load_data_into_graph(graph_data)
+        
+        return backup_path
     
     # ==================== UTILITIES ====================
     
