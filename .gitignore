@@ -5,6 +5,8 @@ __pycache__/
 
 # C extensions
 *.so
+*.pyd
+*.dll
 
 # Distribution / packaging
 .Python
@@ -164,3 +166,4 @@ Thumbs.db
 # Performance profiling
 *.prof
 *.profile
+.ruff_cache/
