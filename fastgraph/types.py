@@ -12,7 +12,7 @@ from pathlib import Path
 Edge = "Edge"
 
 # Basic types
-NodeId = str
+NodeId = Union[str, Tuple[str, ...]]
 NodeAttrs = Dict[str, Any]
 EdgeAttrs = Dict[str, Any]
 
