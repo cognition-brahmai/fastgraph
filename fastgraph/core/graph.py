@@ -1,1273 +1,678 @@
-"""
-Main FastGraph class implementation
-
-This module contains the core FastGraph class that integrates all
-components into a high-performance in-memory graph database.
-"""
+"""Python handles over a shared native graph store."""
 
 from __future__ import annotations
-import time
-import threading
-import logging
-from functools import lru_cache
-from typing import Any, Dict, List, Optional, Set, Tuple, Iterator, Callable, Union
-from pathlib import Path
-from collections import defaultdict
 
-from ..types import (
-    NodeId, NodeAttrs, EdgeKey, EdgeAttrs, NodeBatch, EdgeBatch,
-    NodeFilter, EdgeFilter, NodeResult, EdgeResult, Stats
-)
+import json
+import threading
+import time
+from contextlib import contextmanager
+from copy import deepcopy
+from pathlib import Path
+from typing import Any, Iterator, Mapping
+from uuid import uuid4
+
+try:
+    from .._native import NativeStore
+except ImportError as exc:
+    raise ImportError(
+        "FastGraph requires its native extension. Install with `pip install .` or build "
+        "a development installation with `maturin develop --release`."
+    ) from exc
+
 from ..config.manager import ConfigManager
 from ..exceptions import (
-    FastGraphError, NodeNotFoundError, EdgeNotFoundError, 
-    IndexingError, PersistenceError, ValidationError
+    ClosedGraphError,
+    EdgeNotFoundError,
+    NodeNotFoundError,
+    PersistenceError,
+    StaleReferenceError,
+    ValidationError,
 )
 from .edge import Edge
-from .subgraph import SubgraphView
 from .indexing import IndexManager
-from .traversal import TraversalOperations
+from .node import NodeRef
 from .persistence import PersistenceManager
-from ..utils.path_resolver import PathResolver
-from ..utils.resource_manager import ResourceManager
+from .subgraph import SubgraphView
+from .traversal import TraversalOperations
+
+
+class _GraphState:
+    """Shared ownership and one serializable observation boundary for all scopes."""
+
+    __slots__ = ("store", "lock", "epoch", "closed", "config", "metadata", "transaction_depth")
+
+    def __init__(self, name: str, config: ConfigManager):
+        self.store = NativeStore()
+        self.lock = threading.RLock()
+        self.epoch = 0
+        self.closed = False
+        self.config = config
+        self.metadata = {"name": name, "created_at": time.time(), "version": "3.0.0"}
+        self.transaction_depth = 0
 
 
 class FastGraph:
+    """A graph scope in a native store, with explicit nested forward traversal.
+
+    A string selects a local node. A tuple is an absolute path from the root.
+    Child graphs share storage, locking, persistence and qualified node identities.
+    Relationships are directed and unique by (source, destination, type); repeated
+    insertion replaces properties. Node insertion also replaces properties; use
+    update_node for a merge. Returned property dictionaries are detached copies.
     """
-    FastGraph v2: High-Performance In-Memory Graph Database
-    
-    Core features:
-    - O(1) edge lookups using adjacency lists
-    - Automatic indexing for fast queries  
-    - Batch operations for bulk data
-    - Memory-efficient subgraph views
-    - Compressed persistence with msgpack
-    - Configuration-driven setup
-    - Thread-safe operations
-    - Query result caching
-    """
-    
-    def __init__(self, name: str = "fastgraph", config: Union[str, Path, Dict, ConfigManager] = None,
-                 **kwargs):
-        """
-        Initialize FastGraph instance with enhanced features.
-        
-        Args:
-            name: Graph name for identification
-            config: Configuration (file path, dict, or ConfigManager)
-            **kwargs: Additional configuration parameters to override
-            
-        Example:
-            # Using default config
-            graph = FastGraph()
-            
-            # Using config file
-            graph = FastGraph(config="my_config.yaml")
-            
-            # Using config dict
-            graph = FastGraph(config={"memory": {"query_cache_size": 256}})
-            
-            # Using direct parameters
-            graph = FastGraph(name="my_graph", auto_index=True, cache_size=128)
-            
-            # Enhanced features
-            graph = FastGraph(name="my_graph", enhanced_api=True)
-        """
-        # Load configuration
-        self.config = self._load_config(config, kwargs)
-        
-        # Initialize core attributes
-        self.name = name or self.config.get("engine.name", "fastgraph")
-        
-        # Enhanced features flag
-        self._enhanced_enabled = self.config.get("enhanced_api.enabled", False)
-        
-        # Core storage
-        self.graph: Dict[str, Any] = {
-            "nodes": {},
-            "metadata": {
-                "name": self.name,
-                "created_at": time.time(),
-                "version": self.config.get("engine.version", "2.0.0")
-            }
-        }
-        
-        # Optimization: Edge hash map for O(1) lookup
-        self._edges: Dict[EdgeKey, Edge] = {}
-        
-        # Optimization: Adjacency lists for fast traversal
-        self._out_edges: Dict[NodeId, List[Edge]] = defaultdict(list)
-        self._in_edges: Dict[NodeId, List[Edge]] = defaultdict(list)
-        
-        # Optimization: Relation index for fast rel queries
-        self._rel_index: Dict[str, List[Edge]] = defaultdict(list)
-        
-        # Thread safety - must be initialized before managers that use it
-        self._lock = threading.RLock()
-        
-        # Component managers
-        self.index_manager = IndexManager(
-            auto_index=self.config.get("indexing.auto_index", True)
-        )
-        self.traversal_ops = TraversalOperations(self)
-        self.persistence_manager = PersistenceManager(self._lock, self.config)
-        
-        # Enhanced components
-        if self._enhanced_enabled:
-            self._path_resolver = PathResolver(self.config)
-            self._resource_manager = ResourceManager(self.config)
-            # Register this graph with resource manager
-            self._graph_id = self._resource_manager.register_graph(self, self.name)
-        else:
-            self._path_resolver = None
-            self._resource_manager = None
-            self._graph_id = None
-        
-        # Subgraph views (no data duplication)
-        self._subgraph_views: Dict[str, SubgraphView] = {}
-        
-        # Query cache
-        self._setup_cache(
-            cache_size=self.config.get("memory.query_cache_size", 128),
-            ttl=self.config.get("memory.cache_ttl", 3600)
-        )
-        
-        # Performance metrics
-        self._metrics = {
-            "nodes_added": 0,
-            "edges_added": 0,
-            "queries_executed": 0,
-            "cache_hits": 0,
-            "cache_misses": 0
-        }
-    
-    def _load_config(self, config: Union[str, Path, Dict, ConfigManager],
-                    overrides: Dict) -> ConfigManager:
-        """
-        Load and process configuration.
-        
-        Args:
-            config: Configuration source
-            overrides: Parameter overrides
-            
-        Returns:
-            Loaded configuration manager
-        """
+
+    def __init__(self, name: str = "fastgraph", config=None, **overrides: Any):
         if isinstance(config, ConfigManager):
-            cfg_manager = config
+            cfg = config
+        elif isinstance(config, Mapping):
+            cfg = ConfigManager(config_dict=dict(config))
         elif isinstance(config, (str, Path)):
-            cfg_manager = ConfigManager(config_file=config)
-        elif isinstance(config, dict):
-            cfg_manager = ConfigManager(config_dict=config)
+            cfg = ConfigManager(config_file=config)
+        elif config is None:
+            cfg = ConfigManager()
         else:
-            cfg_manager = ConfigManager()
-        
-        # Apply parameter overrides
-        if overrides:
-            for key, value in overrides.items():
-                # Handle boolean overrides specially
-                if key == "enhanced_api" and isinstance(value, bool):
-                    # Convert to dict format for internal consistency
-                    cfg_manager.set("enhanced_api.enabled", value)
-                else:
-                    cfg_manager.set(key, value)
-        
-        return cfg_manager
-    
-    def _setup_cache(self, cache_size: int, ttl: int) -> None:
-        """
-        Setup LRU cache for queries.
-        
-        Args:
-            cache_size: Maximum cache size
-            ttl: Cache time-to-live in seconds
-        """
-        if cache_size > 0:
-            self.find_nodes = lru_cache(maxsize=cache_size)(self._find_nodes_impl)
-            self._cache_enabled = True
-            self._cache_ttl = ttl
-        else:
-            self.find_nodes = self._find_nodes_no_cache
-            self._cache_enabled = False
-    
-    def clear_cache(self) -> None:
-        """Clear query cache."""
-        if self._cache_enabled and hasattr(self.find_nodes, 'cache_clear'):
-            self.find_nodes.cache_clear()
-    
-    # ==================== BATCH OPERATIONS ====================
-    
-    def add_nodes_batch(self, nodes: NodeBatch) -> None:
-        """
-        Add multiple nodes in one operation (much faster).
-        
-        Args:
-            nodes: List of (node_id, attributes) tuples
-            
-        Example:
-            graph.add_nodes_batch([
-                ("A", {"name": "Alice", "age": 25}),
-                ("B", {"name": "Bob", "age": 27})
-            ])
-        """
-        with self._lock:
-            for node_id, attrs in nodes:
-                self.graph["nodes"][node_id] = dict(attrs)
-                self.index_manager.update_node_index(node_id, {}, attrs)
-            
-            self._metrics["nodes_added"] += len(nodes)
-            self.clear_cache()
-    
-    def add_edges_batch(self, edges: EdgeBatch) -> None:
-        """
-        Add multiple edges in one operation.
-        
-        Args:
-            edges: List of (src, dst, rel, attrs) tuples
-            
-        Example:
-            graph.add_edges_batch([
-                ("A", "B", "friends", {"since": 2021}),
-                ("B", "C", "works_at", {"title": "Engineer"})
-            ])
-        """
-        with self._lock:
-            for edge_data in edges:
-                src, dst, rel = edge_data[0], edge_data[1], edge_data[2]
-                attrs = edge_data[3] if len(edge_data) > 3 else {}
-                self._add_edge_internal(src, dst, rel, attrs)
-            
-            self._metrics["edges_added"] += len(edges)
-            self.clear_cache()
-    
-    # ==================== NODE OPERATIONS ====================
-    
-    def add_node(self, node_id: NodeId, **attrs: Any) -> None:
-        """
-        Add or update a node.
-        
-        Args:
-            node_id: Unique node identifier
-            **attrs: Node attributes
-            
-        Example:
-            graph.add_node("A", name="Alice", age=25, type="Person")
-        """
-        with self._lock:
-            old_attrs = self.graph["nodes"].get(node_id, {})
-            self.graph["nodes"][node_id] = dict(attrs)
-            
-            # Update indexes
-            self.index_manager.update_node_index(node_id, old_attrs, attrs)
-            
-            self._metrics["nodes_added"] += 1
-            self.clear_cache()
-    
-    def get_node(self, node_id: NodeId) -> Optional[NodeAttrs]:
-        """
-        O(1) node lookup.
-        
-        Args:
-            node_id: Node identifier
-            
-        Returns:
-            Node attributes or None if not found
-        """
-        return self.graph["nodes"].get(node_id)
-    
-    def remove_node(self, node_id: NodeId) -> None:
-        """
-        Remove node and all connected edges.
-        
-        Args:
-            node_id: Node identifier to remove
-        """
-        with self._lock:
-            if node_id not in self.graph["nodes"]:
-                return
-            
-            # Remove from indexes
-            attrs = self.graph["nodes"][node_id]
-            self.index_manager.remove_from_indexes(node_id, attrs)
-            
-            # Remove all edges connected to this node
-            edges_to_remove = (list(self._out_edges.get(node_id, [])) + 
-                             list(self._in_edges.get(node_id, [])))
-            for edge in edges_to_remove:
-                self._remove_edge_internal(edge)
-            
-            # Remove node
-            del self.graph["nodes"][node_id]
-            self.clear_cache()
-    
-    # ==================== EDGE OPERATIONS ====================
-    
-    def _add_edge_internal(self, src: NodeId, dst: NodeId, rel: str, attrs: EdgeAttrs) -> None:
-        """
-        Internal edge addition without lock.
-        
-        Args:
-            src: Source node ID
-            dst: Destination node ID
-            rel: Edge relation
-            attrs: Edge attributes
-        """
-        if src not in self.graph["nodes"]:
-            raise NodeNotFoundError(src)
-        if dst not in self.graph["nodes"]:
-            raise NodeNotFoundError(dst)
-        
-        edge = Edge(src, dst, rel, attrs)
-        key = edge.key()
-        
-        # Store in hash map
-        self._edges[key] = edge
-        
-        # Update adjacency lists
-        self._out_edges[src].append(edge)
-        self._in_edges[dst].append(edge)
-        
-        # Update relation index
-        self._rel_index[rel].append(edge)
-    
-    def add_edge(self, src: NodeId, dst: NodeId, rel: str, **attrs: Any) -> None:
-        """
-        Add an edge - O(1) operation.
-        
-        Args:
-            src: Source node ID
-            dst: Destination node ID
-            rel: Edge relation type
-            **attrs: Edge attributes
-            
-        Example:
-            graph.add_edge("A", "B", "friends", since=2021, close=True)
-        """
-        with self._lock:
-            self._add_edge_internal(src, dst, rel, attrs)
-            self._metrics["edges_added"] += 1
-            self.clear_cache()
-    
-    def get_edge(self, src: NodeId, dst: NodeId, rel: str) -> Optional[Edge]:
-        """
-        O(1) edge lookup by key.
-        
-        Args:
-            src: Source node ID
-            dst: Destination node ID
-            rel: Edge relation
-            
-        Returns:
-            Edge object or None if not found
-        """
-        return self._edges.get((src, dst, rel))
-    
-    def _remove_edge_internal(self, edge: Edge) -> None:
-        """
-        Internal edge removal without lock.
-        
-        Args:
-            edge: Edge to remove
-        """
-        key = edge.key()
-        if key in self._edges:
-            del self._edges[key]
-            
-            # Update adjacency lists
-            if edge.src in self._out_edges:
-                try:
-                    self._out_edges[edge.src].remove(edge)
-                except ValueError:
-                    pass
-            
-            if edge.dst in self._in_edges:
-                try:
-                    self._in_edges[edge.dst].remove(edge)
-                except ValueError:
-                    pass
-            
-            # Update relation index
-            if edge.rel in self._rel_index:
-                try:
-                    self._rel_index[edge.rel].remove(edge)
-                except ValueError:
-                    pass
-    
-    def remove_edge(self, src: Optional[NodeId] = None, dst: Optional[NodeId] = None,
-                   rel: Optional[str] = None) -> int:
-        """
-        Remove edges matching filters.
-        
-        Args:
-            src: Optional source node filter
-            dst: Optional destination node filter
-            rel: Optional relation filter
-            
-        Returns:
-            Number of edges removed
-        """
-        with self._lock:
-            edges_to_remove = []
-            
-            # Use indexes for faster filtering
-            if rel and src:
-                # Use rel index + filter by src
-                edges_to_remove = [e for e in self._rel_index.get(rel, []) if e.src == src]
-                if dst:
-                    edges_to_remove = [e for e in edges_to_remove if e.dst == dst]
-            elif rel:
-                edges_to_remove = list(self._rel_index.get(rel, []))
-            elif src:
-                edges_to_remove = list(self._out_edges.get(src, []))
-                if dst:
-                    edges_to_remove = [e for e in edges_to_remove if e.dst == dst]
-            elif dst:
-                edges_to_remove = list(self._in_edges.get(dst, []))
-            
-            for edge in edges_to_remove:
-                self._remove_edge_internal(edge)
-            
-            self.clear_cache()
-            return len(edges_to_remove)
-    
-    # ==================== GRAPH TRAVERSAL ====================
-    
-    def neighbors_out(self, node_id: NodeId, rel: Optional[str] = None) -> List[Tuple[NodeId, Edge]]:
-        """
-        Get outgoing neighbors - O(degree) using adjacency list.
-        
-        Args:
-            node_id: Node ID
-            rel: Optional relation filter
-            
-        Returns:
-            List of (neighbor_id, edge) tuples
-        """
-        return self.traversal_ops.neighbors_out(node_id, rel)
-    
-    def neighbors_in(self, node_id: NodeId, rel: Optional[str] = None) -> List[Tuple[NodeId, Edge]]:
-        """
-        Get incoming neighbors - O(degree) using adjacency list.
-        
-        Args:
-            node_id: Node ID
-            rel: Optional relation filter
-            
-        Returns:
-            List of (neighbor_id, edge) tuples
-        """
-        return self.traversal_ops.neighbors_in(node_id, rel)
-    
-    def neighbors(self, node_id: NodeId, rel: Optional[str] = None) -> List[Tuple[NodeId, Edge]]:
-        """
-        Get all neighbors (both directions).
-        
-        Args:
-            node_id: Node ID
-            rel: Optional relation filter
-            
-        Returns:
-            List of (neighbor_id, edge) tuples
-        """
-        return self.traversal_ops.neighbors(node_id, rel)
-    
-    def degree(self, node_id: NodeId) -> Tuple[int, int, int]:
-        """
-        Returns (out_degree, in_degree, total_degree).
-        
-        Args:
-            node_id: Node ID
-            
-        Returns:
-            Tuple of degree counts
-        """
-        return self.traversal_ops.degree(node_id)
-    
-    # ==================== SEARCH ====================
-    
-    def _find_nodes_impl(self, **filters: Any) -> Tuple[Tuple[NodeId, NodeAttrs], ...]:
-        """
-        Cacheable implementation.
-        
-        Args:
-            **filters: Node attribute filters
-            
-        Returns:
-            Tuple of (node_id, attributes) pairs
-        """
-        # Convert dict filters to tuple for caching
-        filter_items = tuple(sorted(filters.items()))
-        return tuple(self._find_nodes_no_cache(dict(filter_items)))
-    
-    def _find_nodes_no_cache(self, filters: Dict[str, Any]) -> List[Tuple[NodeId, NodeAttrs]]:
-        """
-        Actual search implementation.
-        
-        Args:
-            filters: Node attribute filters
-            
-        Returns:
-            List of (node_id, attributes) pairs
-        """
-        if not filters:
-            return list(self.graph["nodes"].items())
-        
-        # Use indexes if available
-        indexed_keys = [k for k in filters.keys() if self.index_manager.has_index(k)]
-        if indexed_keys:
-            # Use best index (most selective)
-            best_key = min(indexed_keys, 
-                          key=lambda k: len(self.index_manager.query_by_index(k, filters[k])))
-            candidates = self.index_manager.query_by_index(best_key, filters[best_key])
-            
-            results = []
-            for nid in candidates:
-                attrs = self.graph["nodes"].get(nid)
-                if attrs and all(attrs.get(k) == v for k, v in filters.items()):
-                    results.append((nid, attrs))
-            return results
-        
-        # Full scan
-        return [(nid, attrs) for nid, attrs in self.graph["nodes"].items()
-                if all(attrs.get(k) == v for k, v in filters.items())]
-    
-    def find_nodes(self, **filters: Any) -> NodeResult:
-        """
-        Find nodes matching attribute filters.
-        
-        Args:
-            **filters: Attribute filters
-            
-        Returns:
-            List of (node_id, attributes) pairs
-            
-        Example:
-            graph.find_nodes(type="Person", age=25)
-        """
-        self._metrics["queries_executed"] += 1
-        
-        if self._cache_enabled and hasattr(self.find_nodes, 'cache_info'):
-            cache_info = self.find_nodes.cache_info()
-            if cache_info.hits > 0:
-                self._metrics["cache_hits"] += 1
+            raise ValidationError("Config must be a mapping, path, or ConfigManager")
+        for key, value in overrides.items():
+            cfg.set("enhanced_api.enabled" if key == "enhanced_api" else key, value)
+        if name is None:
+            name = cfg.get("engine.name", "fastgraph")
+        self._validate_local_id(name, "name")
+        self._state = _GraphState(name, cfg)
+        self._scope = 0
+        self._epoch = 0
+        self._closed = False
+        self._subgraph_views: dict[str, SubgraphView] = {}
+        self._setup_managers()
+
+    @classmethod
+    def _view(cls, state: _GraphState, scope: int) -> FastGraph:
+        instance = cls.__new__(cls)
+        instance._state = state
+        instance._scope = scope
+        instance._epoch = state.epoch
+        instance._closed = False
+        instance._subgraph_views = {}
+        instance._setup_managers()
+        return instance
+
+    def _setup_managers(self) -> None:
+        self.index_manager = IndexManager(self)
+        self.traversal_ops = TraversalOperations(self)
+        self.persistence_manager = PersistenceManager(config=self._state.config)
+
+    def _guard(self) -> None:
+        if self._closed or self._state.closed:
+            raise ClosedGraphError("The graph is closed")
+        if self._scope != 0 and self._epoch != self._state.epoch:
+            raise StaleReferenceError("Graph scope predates a load or transaction rollback")
+        if not self._state.store.scope_exists(self._scope):
+            raise StaleReferenceError("The node owning this graph scope was removed")
+
+    @staticmethod
+    def _validate_local_id(value: Any, field: str = "node_id") -> None:
+        if not isinstance(value, str) or not value:
+            raise ValidationError("Identifiers must be nonempty strings", field=field, value=value)
+
+    @staticmethod
+    def _native_call(function, *args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except (ValueError, TypeError, OverflowError) as exc:
+            raise ValidationError(str(exc)) from exc
+
+    @staticmethod
+    def _parse_filters(filters: Mapping[str, Any]) -> list[tuple[str, str, Any]]:
+        operators = {"eq", "ne", "gt", "gte", "lt", "lte", "in", "contains", "exists", "startswith"}
+        parsed = []
+        for expression, value in filters.items():
+            if not isinstance(expression, str) or not expression:
+                raise ValidationError("Property filters require nonempty string keys")
+            if "__" in expression:
+                key, operator = expression.rsplit("__", 1)
+                if operator not in operators or not key:
+                    raise ValidationError(f"Unknown filter operator in '{expression}'")
             else:
-                self._metrics["cache_misses"] += 1
-        
-        return list(self.find_nodes(**filters))
-    
-    def find_edges(self, src: Optional[NodeId] = None, dst: Optional[NodeId] = None,
-                  rel: Optional[str] = None, **attr_filters) -> EdgeResult:
-        """
-        Optimized edge search using indexes.
-        
-        Args:
-            src: Optional source node filter
-            dst: Optional destination node filter
-            rel: Optional relation filter
-            **attr_filters: Edge attribute filters
-            
-        Returns:
-            List of matching edges
-        """
-        # Use adjacency lists and rel index for fast filtering
-        candidates = None
-        
-        if rel:
-            candidates = self._rel_index.get(rel, [])
-        elif src:
-            candidates = self._out_edges.get(src, [])
-        elif dst:
-            candidates = self._in_edges.get(dst, [])
-        else:
-            candidates = self._edges.values()
-        
-        # Apply additional filters
-        results = list(candidates)
-        if src and rel is None:
-            results = [e for e in results if e.src == src]
-        if dst and rel is None:
-            results = [e for e in results if e.dst == dst]
-        
-        # Apply attribute filters
-        for k, v in attr_filters.items():
-            results = [e for e in results if e.get_attribute(k) == v]
-        
-        return results
-    
-    # ==================== INDEXING ====================
-    
-    def build_node_index(self, attr_name: str) -> None:
-        """
-        Build index on attribute.
-        
-        Args:
-            attr_name: Attribute name to index
-        """
-        with self._lock:
-            self.index_manager.create_node_index(attr_name, self.graph["nodes"])
-    
-    def drop_node_index(self, attr_name: str) -> None:
-        """
-        Drop an index.
-        
-        Args:
-            attr_name: Index name to drop
-        """
-        with self._lock:
-            self.index_manager.drop_node_index(attr_name)
-    
-    def get_index_stats(self) -> Dict[str, Any]:
-        """
-        Get index statistics.
-        
-        Returns:
-            Dictionary of index statistics
-        """
-        return self.index_manager.get_index_statistics()
-    
-    # ==================== SUBGRAPHS ====================
-    
-    def create_subgraph_view(self, name: str,
-                            node_filter: Optional[NodeFilter] = None) -> SubgraphView:
-        """
-        Create memory-efficient subgraph view (no data duplication).
-        
-        Args:
-            name: View name
-            node_filter: Optional function to filter nodes
-            
-        Returns:
-            SubgraphView instance
-        """
-        node_filter = node_filter or (lambda nid, attrs: True)
-        node_ids = {nid for nid, attrs in self.graph["nodes"].items() 
-                   if node_filter(nid, attrs)}
-        view = SubgraphView(self, node_ids)
-        self._subgraph_views[name] = view
-        return view
-    
-    def get_subgraph_view(self, name: str) -> Optional[SubgraphView]:
-        """
-        Get subgraph view.
-        
-        Args:
-            name: View name
-            
-        Returns:
-            SubgraphView instance or None
-        """
-        return self._subgraph_views.get(name)
-    
-    # ==================== PERSISTENCE ====================
-    
-    def save(self, path: Optional[Union[str, Path]] = None, format: Optional[str] = None, **kwargs) -> Union[Path, None]:
-        """
-        Save graph with enhanced features and smart defaults.
-        
-        Args:
-            path: File path to save to (auto-resolved if None and enhanced API enabled)
-            format: File format ("msgpack", "pickle", "json") - auto-detected if None
-            **kwargs: Additional save options
-            
-        Returns:
-            Path where graph was saved (if enhanced API enabled)
-            
-        Example:
-            # Basic usage
-            graph.save("my_graph.msgpack")
-            
-            # Enhanced - auto-resolve path and format
-            graph.save()  # Saves to default location with default format
-            
-            # With path hint
-            graph.save("data/my_graph")  # Auto-resolves format and path
-        """
-        # Prepare data
-        data = {
-            "nodes": self.graph["nodes"],
-            "_edges": self._edges,
-            "metadata": self.graph["metadata"],
-            "node_indexes": self.index_manager.node_indexes
-        }
-        
-        # Enhanced save with auto-resolution
-        if self._enhanced_enabled and self._path_resolver:
-            if path is None:
-                # Use auto-resolution
-                saved_path = self.persistence_manager.save_auto(
-                    data, None, self.name, format, **kwargs
-                )
-                return saved_path
-            else:
-                # Path provided - try enhanced resolution
-                try:
-                    resolved_path = self._path_resolver.resolve_path(path, self.name, format)
-                    if not format:
-                        format = self._path_resolver.detect_format(resolved_path) or "msgpack"
-                    
-                    self.persistence_manager.save(data, resolved_path, format, **kwargs)
-                    return resolved_path
-                except Exception:
-                    # Fallback to basic save
-                    if not format:
-                        format = self.config.get("storage.default_format", "msgpack")
-                    self.persistence_manager.save(data, path, format, **kwargs)
-                    return Path(path)
-        else:
-            # Basic save
-            if not format:
-                format = self.config.get("storage.default_format", "msgpack")
-            if path is None:
-                raise PersistenceError("Path required when enhanced API is disabled",
-                                    operation="save")
-            self.persistence_manager.save(data, path, format, **kwargs)
-            return None
-    
-    def load(self, path: Optional[Union[str, Path]] = None, format: Optional[str] = None, **kwargs) -> Union[Path, None]:
-        """
-        Load graph with automatic format detection and path resolution.
-        
-        Args:
-            path: File path to load from (auto-resolved if None and enhanced API enabled)
-            format: File format (auto-detected if None)
-            **kwargs: Additional load options
-            
-        Returns:
-            Path where graph was loaded from (if enhanced API enabled)
-            
-        Example:
-            # Basic usage
-            graph.load("my_graph.msgpack")
-            
-            # Enhanced - auto-discover and load
-            graph.load()  # Auto-discovers graph file
-            
-            # Load by name
-            graph.load(graph_name="my_graph")  # Searches for graph file
-        """
-        # Enhanced load with auto-resolution
-        if self._enhanced_enabled and self._path_resolver:
+                key, operator = expression, "eq"
+            if operator == "exists" and not isinstance(value, bool):
+                raise ValidationError("The exists operator expects a boolean")
+            if operator == "in" and not isinstance(value, (list, tuple)):
+                raise ValidationError("The in operator expects a list")
+            if operator == "in" and isinstance(value, tuple):
+                value = list(value)
+            parsed.append((key, operator, value))
+        return parsed
+
+    def _resolve_id(self, value) -> int:
+        self._guard()
+        if isinstance(value, NodeRef):
+            if value._state is not self._state:
+                raise ValidationError("A node from another store cannot be used as an endpoint")
+            value._guard()
+            return value._id
+        if isinstance(value, str):
+            self._validate_local_id(value)
+            node_id = self._state.store.node_id(self._scope, value)
+            if node_id is None:
+                raise NodeNotFoundError(value)
+            return node_id
+        if isinstance(value, tuple) and value:
+            scope = 0
+            for position, local_id in enumerate(value):
+                self._validate_local_id(local_id)
+                node_id = self._state.store.node_id(scope, local_id)
+                if node_id is None:
+                    raise NodeNotFoundError(repr(value[: position + 1]))
+                if position < len(value) - 1:
+                    scope = self._state.store.node_info(node_id)[2]
+                    if scope is None:
+                        raise NodeNotFoundError(repr(value[: position + 2]))
+            return node_id
+        raise ValidationError("Use a local string ID, absolute path tuple, or NodeRef")
+
+    def _node_ref(self, node_id: int) -> NodeRef:
+        return NodeRef(self._state, node_id)
+
+    def _display_id(self, node_id: int):
+        scope, local_id, _ = self._state.store.node_info(node_id)
+        return local_id if scope == self._scope else self._node_ref(node_id).path
+
+    def _edge_ref(self, edge_id: int) -> Edge:
+        src, dst, rel, attrs = self._state.store.get_edge(edge_id)
+        return Edge(self._display_id(src), self._display_id(dst), rel, attrs, edge_id)
+
+    @property
+    def config(self) -> ConfigManager:
+        return self._state.config
+
+    @property
+    def name(self) -> str:
+        with self._state.lock:
+            self._guard()
+            owner = self._state.store.scope_owner(self._scope)
+            return self._state.metadata["name"] if owner is None else self._node_ref(owner).local_id
+
+    @property
+    def path(self) -> tuple[str, ...]:
+        with self._state.lock:
+            self._guard()
+            owner = self._state.store.scope_owner(self._scope)
+            return () if owner is None else self._node_ref(owner).path
+
+    @property
+    def parent(self) -> FastGraph | None:
+        with self._state.lock:
+            self._guard()
+            owner = self._state.store.scope_owner(self._scope)
+            if owner is None:
+                return None
+            return self._view(self._state, self._state.store.node_info(owner)[0])
+
+    @property
+    def owner(self) -> NodeRef | None:
+        with self._state.lock:
+            self._guard()
+            owner = self._state.store.scope_owner(self._scope)
+            return None if owner is None else self._node_ref(owner)
+
+    @property
+    def revision(self) -> int:
+        with self._state.lock:
+            self._guard()
+            return self._state.store.revision
+
+    @property
+    def node_count(self) -> int:
+        return self.stats()["nodes"]
+
+    @property
+    def edge_count(self) -> int:
+        return self.stats()["edges"]
+
+    @property
+    def graph(self) -> dict[str, Any]:
+        """A detached inspection snapshot, not a mutable storage escape hatch."""
+        with self._state.lock:
+            self._guard()
+            return {"nodes": dict(self.find_nodes()), "metadata": deepcopy(self._state.metadata)}
+
+    def resolve(self, value) -> NodeRef:
+        with self._state.lock:
+            return self._node_ref(self._resolve_id(value))
+
+    def enter(self, node, *, create: bool = True) -> FastGraph | None:
+        return self.resolve(node).enter(create=create)
+
+    def add_node(self, node_id: str, **attrs: Any) -> NodeRef:
+        return self.add_nodes_batch([(node_id, attrs)])[0]
+
+    def add_nodes_batch(self, nodes) -> list[NodeRef]:
+        prepared = []
+        for node_id, attrs in nodes:
+            self._validate_local_id(node_id)
+            if not isinstance(attrs, Mapping):
+                raise ValidationError("Node properties must be a mapping")
+            prepared.append((node_id, dict(attrs)))
+        with self._state.lock:
+            self._guard()
+            ids = self._native_call(self._state.store.add_nodes, self._scope, prepared)
+            return [self._node_ref(node_id) for node_id in ids]
+
+    def update_node(self, node, **attrs: Any) -> NodeRef:
+        with self._state.lock:
+            node_id = self._resolve_id(node)
+            scope, local_id, _ = self._state.store.node_info(node_id)
+            properties = self._state.store.get_node(node_id)
+            properties.update(attrs)
+            self._native_call(self._state.store.add_nodes, scope, [(local_id, properties)])
+            return self._node_ref(node_id)
+
+    def get_node(self, node) -> dict[str, Any] | None:
+        with self._state.lock:
             try:
-                if path is None:
-                    # Auto-discover graph file
-                    graph_data, loaded_path = self.persistence_manager.load_auto(
-                        None, self.name, format, **kwargs
-                    )
-                else:
-                    # Path provided - try enhanced resolution
-                    if isinstance(path, str) and not Path(path).exists():
-                        # Might be a graph name
-                        graph_data, loaded_path = self.persistence_manager.load_auto(
-                            path, None, format, **kwargs
-                        )
-                    else:
-                        # Direct path
-                        if not format:
-                            format = self._path_resolver.detect_format(path) or "msgpack"
-                        graph_data = self.persistence_manager.load(path, format, **kwargs)
-                        loaded_path = Path(path)
-                
-                # Load the data into current graph
-                self._load_data_into_graph(graph_data)
-                
-                # Update resource manager
-                if self._resource_manager and self._graph_id:
-                    self._resource_manager.update_access_time(self._graph_id)
-                
-                return loaded_path
-                
-            except Exception as e:
-                # Fallback to basic load
-                if path and format:
-                    try:
-                        graph_data = self.persistence_manager.load(path, format, **kwargs)
-                        self._load_data_into_graph(graph_data)
-                        return Path(path)
-                    except Exception:
-                        raise PersistenceError(f"Failed to load graph: {e}", operation="load")
-                else:
-                    raise PersistenceError(f"Failed to load graph: {e}", operation="load")
-        else:
-            # Basic load
-            if path is None:
-                raise PersistenceError("Path required when enhanced API is disabled",
-                                    operation="load")
-            if not format:
-                format = self.config.get("storage.default_format", "msgpack")
-            graph_data = self.persistence_manager.load(path, format, **kwargs)
-            self._load_data_into_graph(graph_data)
-            return Path(path)
-    
-    def _load_data_into_graph(self, data: Dict[str, Any]) -> None:
-        """Helper method to load data into current graph instance."""
-        # Clear current state
-        self.clear()
-        
-        # Reconstruct graph
-        self.graph["nodes"] = data["nodes"]
-        self.graph["metadata"] = data.get("metadata", self.graph["metadata"])
-        
-        # Rebuild edges
-        for edge in data["edges"].values():
-            self._add_edge_internal(edge.src, edge.dst, edge.rel, edge.attrs)
-        
-        # Rebuild indexes
-        self.index_manager.node_indexes = data.get("indexes", {})
-    
-    def exists(self, path_hint: Optional[Union[str, Path]] = None) -> bool:
-        """
-        Check if a graph file exists.
-        
-        Args:
-            path_hint: Optional path hint or graph name to check
-            
-        Returns:
-            True if graph file exists, False otherwise
-            
-        Example:
-            if graph.exists():
-                print("Graph file exists")
-                
-            if graph.exists("my_graph"):
-                print("Graph 'my_graph' exists")
-        """
-        if not self._enhanced_enabled or not self._path_resolver:
-            # Basic check
-            if path_hint:
-                return Path(path_hint).exists()
-            return False
-        
-        # Enhanced existence check
-        if path_hint:
-            if isinstance(path_hint, str) and not Path(path_hint).exists():
-                # Try to find by name
-                found_path = self._path_resolver.find_graph_file(path_hint)
-                return found_path is not None and found_path.exists()
-            else:
-                return Path(path_hint).exists()
-        else:
-            # Check default location for this graph
-            default_path = self._path_resolver.get_default_path(self.name)
-            return default_path.exists()
-    
-    def translate(self, source_path: Union[str, Path], target_path: Union[str, Path],
-                  source_format: Optional[str] = None, target_format: str = "msgpack",
-                  **kwargs) -> Path:
-        """
-        Convert graph file from one format to another.
-        
-        Args:
-            source_path: Source file path
-            target_path: Target file path
-            source_format: Source format (auto-detected if None)
-            target_format: Target format
-            **kwargs: Additional options
-            
-        Returns:
-            Path to the converted file
-            
-        Example:
-            # Convert JSON to msgpack
-            graph.translate("data.json", "data.msgpack", "json", "msgpack")
-            
-            # Auto-detect source and convert to msgpack
-            graph.translate("data.json", "data.msgpack", target_format="msgpack")
-        """
-        if not self._enhanced_enabled or not self._path_resolver:
-            raise PersistenceError("Format translation requires enhanced API to be enabled",
-                                operation="translate")
-        
-        source_path = Path(source_path)
-        target_path = Path(target_path)
-        
-        # Detect source format if not specified
-        if not source_format:
-            source_format = self._path_resolver.detect_format(source_path)
-            if not source_format:
-                raise PersistenceError(f"Cannot detect source format for {source_path}",
-                                    operation="translate")
-        
-        # Load source data
-        source_data = self.persistence_manager.load(source_path, source_format, **kwargs)
-        
-        # Save in target format
-        self.persistence_manager.save(source_data, target_path, target_format, **kwargs)
-        
-        return target_path
-    
-    def get_translation(self, source_path: Union[str, Path], target_format: str,
-                       output_dir: Optional[Union[str, Path]] = None) -> Path:
-        """
-        Extract graph data from a file and convert it to a different format.
-        
-        Args:
-            source_path: Source file path
-            target_format: Target format for extraction
-            output_dir: Optional output directory (auto-resolved if None)
-            
-        Returns:
-            Path to the extracted file
-            
-        Example:
-            # Extract data from JSON to msgpack
-            extracted_path = graph.get_translation("data.json", "msgpack")
-        """
-        if not self._enhanced_enabled or not self._path_resolver:
-            raise PersistenceError("Format extraction requires enhanced API to be enabled",
-                                operation="get_translation")
-        
-        source_path = Path(source_path)
-        
-        # Determine output path
-        if output_dir:
-            output_dir = Path(output_dir)
-            output_dir.mkdir(parents=True, exist_ok=True)
-            target_path = output_dir / f"{source_path.stem}.{target_format}"
-        else:
-            target_path = source_path.parent / f"{source_path.stem}.{target_format}"
-        
-        # Perform translation
-        return self.translate(source_path, target_path, None, target_format)
-    
-    # ==================== FACTORY METHODS ====================
-    
-    @classmethod
-    def from_file(cls, path: Union[str, Path], format: Optional[str] = None,
-                  config: Optional[Union[str, Path, Dict, ConfigManager]] = None,
-                  **kwargs) -> 'FastGraph':
-        """
-        Create FastGraph instance from existing file.
-        
-        Args:
-            path: Path to graph file
-            format: File format (auto-detected if None)
-            config: Optional configuration
-            **kwargs: Additional parameters
-            
-        Returns:
-            FastGraph instance loaded with data from file
-            
-        Example:
-            graph = FastGraph.from_file("my_graph.msgpack")
-            graph = FastGraph.from_file("data.json", config={"enhanced_api": {"enabled": True}})
-        """
-        # Create instance
-        instance = cls(config=config, **kwargs)
-        
-        # Load data
-        instance.load(path, format)
-        
-        return instance
-    
-    @classmethod
-    def load_graph(cls, path_hint: Optional[Union[str, Path]] = None,
-                   graph_name: Optional[str] = None,
-                   config: Optional[Union[str, Path, Dict, ConfigManager]] = None,
-                   **kwargs) -> 'FastGraph':
-        """
-        Factory method to load existing graph with enhanced discovery.
-        
-        Args:
-            path_hint: Optional path hint for graph file
-            graph_name: Name of graph to search for
-            config: Optional configuration
-            **kwargs: Additional parameters
-            
-        Returns:
-            FastGraph instance loaded with data
-            
-        Example:
-            # Load from specific file
-            graph = FastGraph.load_graph("my_graph.msgpack")
-            
-            # Auto-discover by name
-            graph = FastGraph.load_graph(graph_name="my_graph")
-            
-            # Auto-discover any graph
-            graph = FastGraph.load_graph()
-        """
-        # Create instance with enhanced features enabled
-        if config is None:
-            config = {"enhanced_api": {"enabled": True}}
-        elif isinstance(config, dict):
-            config = {"enhanced_api": {"enabled": True}, **config}
-        
-        instance = cls(config=config, **kwargs)
-        
-        # Load data
-        if path_hint or graph_name:
-            # Call instance load method directly
-            instance.load(path_hint, **kwargs)
-        else:
-            # Try to auto-discover
-            if instance._enhanced_enabled and instance._path_resolver:
-                # Try to find any graph file in default locations
-                if instance.name:
-                    instance.load(graph_name=instance.name, **kwargs)
-                else:
-                    raise PersistenceError("Cannot auto-discover graph without name or path",
-                                        operation="load")
-            else:
-                raise PersistenceError("Path or graph name required when enhanced API is disabled",
-                                    operation="load")
-        
-        return instance
-    
-    @classmethod
-    def with_config(cls, config: Union[str, Path, Dict, ConfigManager],
-                   name: Optional[str] = None, **kwargs) -> 'FastGraph':
-        """
-        Create FastGraph instance with specific configuration.
-        
-        Args:
-            config: Configuration source
-            name: Optional graph name
-            **kwargs: Additional configuration overrides
-            
-        Returns:
-            FastGraph instance with specified configuration
-            
-        Example:
-            config = {"enhanced_api": {"enabled": True}, "memory": {"query_cache_size": 256}}
-            graph = FastGraph.with_config(config, name="my_graph")
-        """
-        return cls(name=name, config=config, **kwargs)
-    
-    # ==================== CONTEXT MANAGER ====================
-    
-    def __enter__(self):
-        """
-        Context manager entry.
-        
-        Returns:
-            Self for context usage
-            
-        Example:
-            with FastGraph(name="temp_graph") as graph:
-                graph.add_node("A", name="Alice")
-                graph.add_node("B", name="Bob")
-                graph.add_edge("A", "B", "knows")
-                # Auto-save and cleanup on exit
-        """
-        import logging
-        logger = logging.getLogger(__name__)
-        
-        # Update resource manager access time
-        if self._resource_manager and self._graph_id:
-            self._resource_manager.update_access_time(self._graph_id)
-        
-        return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """
-        Context manager exit with automatic cleanup.
-        
-        Args:
-            exc_type: Exception type (if any)
-            exc_val: Exception value (if any)
-            exc_tb: Exception traceback (if any)
-        """
-        import logging
-        logger = logging.getLogger(__name__)
-        
-        try:
-            # Auto-save if enabled and no exception occurred
-            if exc_type is None and self._enhanced_enabled:
-                auto_save = self.config.get("persistence", {}).get("auto_save_on_exit", False)
-                if auto_save:
-                    try:
-                        self.save()
-                    except Exception as e:
-                        logger.warning(f"Auto-save failed on context exit: {e}")
-            
-            # Cleanup resources
-            if self._resource_manager and self._graph_id:
-                self._resource_manager.unregister_graph(self._graph_id)
-                
-        except Exception as e:
-            logger.error(f"Error during context manager cleanup: {e}")
-        
-        # Don't suppress exceptions
-        return False
-    
-    def cleanup(self) -> None:
-        """
-        Explicit cleanup method for resource management.
-        
-        This method should be called when the graph instance is no longer needed
-        to ensure proper resource cleanup, especially when not using context manager.
-        
-        Example:
-            graph = FastGraph()
-            # ... use graph ...
-            graph.cleanup()  # Explicit cleanup
-        """
-        import logging
-        logger = logging.getLogger(__name__)
-        
-        try:
-            # Save if auto-save is enabled
-            if self._enhanced_enabled:
-                auto_save = self.config.get("persistence", {}).get("auto_save_on_cleanup", False)
-                if auto_save:
-                    try:
-                        self.save()
-                    except Exception as e:
-                        logger.warning(f"Auto-save failed during cleanup: {e}")
-            
-            # Unregister from resource manager
-            if self._resource_manager and self._graph_id:
-                self._resource_manager.unregister_graph(self._graph_id)
-                self._graph_id = None
-                
-        except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
-    
-    def backup(self, backup_dir: Optional[Path] = None) -> List[Path]:
-        """
-        Create backup(s) of the current graph.
-        
-        Args:
-            backup_dir: Optional backup directory override
-            
-        Returns:
-            List of paths to created backup files
-            
-        Example:
-            backup_paths = graph.backup()
-            print(f"Created backups: {backup_paths}")
-        """
-        if not self._enhanced_enabled:
-            raise PersistenceError("Backup requires enhanced API to be enabled",
-                                operation="backup")
-        
-        # Prepare data
-        data = {
-            "nodes": self.graph["nodes"],
-            "_edges": self._edges,
-            "metadata": self.graph["metadata"],
-            "node_indexes": self.index_manager.node_indexes
-        }
-        
-        return self.persistence_manager.backup(data, self.name, backup_dir)
-    
-    def restore_from_backup(self, backup_dir: Optional[Path] = None,
-                           format: Optional[str] = None) -> Path:
-        """
-        Restore graph from the most recent backup.
-        
-        Args:
-            backup_dir: Optional backup directory override
-            format: Optional format preference
-            
-        Returns:
-            Path to the backup file that was restored
-            
-        Example:
-            backup_path = graph.restore_from_backup()
-            print(f"Restored from: {backup_path}")
-        """
-        if not self._enhanced_enabled:
-            raise PersistenceError("Restore requires enhanced API to be enabled",
-                                operation="restore")
-        
-        # Restore data
-        graph_data, backup_path = self.persistence_manager.restore_from_backup(
-            self.name, backup_dir, format
-        )
-        
-        # Load into current graph
-        self._load_data_into_graph(graph_data)
-        
-        return backup_path
-    
-    # ==================== UTILITIES ====================
-    
-    def stats(self) -> Stats:
-        """
-        Graph statistics.
-        
-        Returns:
-            Dictionary of graph statistics
-        """
-        stats = {
-            "nodes": len(self.graph["nodes"]),
-            "edges": len(self._edges),
-            "subgraphs": len(self._subgraph_views),
-            "indexes": len(self.index_manager.node_indexes),
-            "components": len(self.traversal_ops.connected_components()),
-            "cache_size": getattr(self.find_nodes, 'cache_info', lambda: None)().currsize if self._cache_enabled else 0
-        }
-        
-        # Add metrics
-        stats.update(self._metrics)
-        
-        # Add index stats
-        index_stats = self.index_manager.get_index_statistics()
-        if "global" in index_stats:
-            stats["index_hits"] = index_stats["global"]["index_hits"]
-            stats["index_misses"] = index_stats["global"]["index_misses"]
-        
-        return stats
-    
-    def clear(self) -> None:
-        """
-        Clear all data.
-        """
-        with self._lock:
-            self.graph = {
-                "nodes": {},
-                "metadata": {
+                return self._state.store.get_node(self._resolve_id(node))
+            except NodeNotFoundError:
+                return None
+
+    def remove_node(self, node) -> bool:
+        with self._state.lock:
+            try:
+                node_id = self._resolve_id(node)
+            except NodeNotFoundError:
+                return False
+            return self._state.store.remove_node(node_id)
+
+    def add_edge(self, src, dst, rel: str, **attrs: Any) -> Edge:
+        return self.add_edges_batch([(src, dst, rel, attrs)])[0]
+
+    def add_edges_batch(self, edges) -> list[Edge]:
+        with self._state.lock:
+            self._guard()
+            prepared = []
+            for edge in edges:
+                if len(edge) not in (3, 4):
+                    raise ValidationError("Edges require (source, destination, type[, properties])")
+                src, dst, rel = edge[:3]
+                self._validate_local_id(rel, "rel")
+                attrs = edge[3] if len(edge) == 4 else {}
+                if attrs is None:
+                    attrs = {}
+                if not isinstance(attrs, Mapping):
+                    raise ValidationError("Relationship properties must be a mapping")
+                prepared.append((self._resolve_id(src), self._resolve_id(dst), rel, dict(attrs)))
+            ids = self._native_call(self._state.store.add_edges, prepared)
+            return [self._edge_ref(edge_id) for edge_id in ids]
+
+    def get_edge(self, src, dst, rel: str) -> Edge | None:
+        with self._state.lock:
+            try:
+                src_id, dst_id = self._resolve_id(src), self._resolve_id(dst)
+            except NodeNotFoundError:
+                return None
+            edge_id = self._state.store.edge_id(src_id, dst_id, rel)
+            return None if edge_id is None else self._edge_ref(edge_id)
+
+    def update_edge(self, src, dst, rel: str, **attrs: Any) -> Edge:
+        with self._state.lock:
+            edge = self.get_edge(src, dst, rel)
+            if edge is None:
+                raise EdgeNotFoundError(str(src), str(dst), rel)
+            properties = dict(edge.attrs)
+            properties.update(attrs)
+            return self.add_edge(src, dst, rel, **properties)
+
+    def find_nodes(
+        self, *, recursive: bool = False, limit: int | None = None, **filters: Any
+    ) -> list[tuple[Any, dict[str, Any]]]:
+        with self._state.lock:
+            self._guard()
+            ids = self._native_call(
+                self._state.store.find_nodes,
+                self._scope,
+                self._parse_filters(filters),
+                recursive=recursive,
+                limit=limit,
+            )
+            return [
+                (
+                    self._node_ref(nid).path if recursive else self._display_id(nid),
+                    self._state.store.get_node(nid),
+                )
+                for nid in ids
+            ]
+
+    def node_ids(self, *, recursive: bool = False) -> tuple:
+        with self._state.lock:
+            self._guard()
+            return tuple(
+                self._node_ref(nid).path if recursive else self._display_id(nid)
+                for nid in self._state.store.node_ids(self._scope, recursive=recursive)
+            )
+
+    def nodes(self, *, recursive: bool = False, **filters: Any) -> tuple[NodeRef, ...]:
+        with self._state.lock:
+            self._guard()
+            ids = self._native_call(
+                self._state.store.find_nodes,
+                self._scope,
+                self._parse_filters(filters),
+                recursive=recursive,
+            )
+            return tuple(self._node_ref(nid) for nid in ids)
+
+    def find_edges(
+        self, src=None, dst=None, rel: str | None = None, *, recursive: bool = False, **filters: Any
+    ) -> list[Edge]:
+        with self._state.lock:
+            self._guard()
+            src_id = None if src is None else self._resolve_id(src)
+            dst_id = None if dst is None else self._resolve_id(dst)
+            ids = self._native_call(
+                self._state.store.edge_ids,
+                self._scope,
+                recursive=recursive,
+                src=src_id,
+                dst=dst_id,
+                rel=rel,
+                filters=self._parse_filters(filters),
+            )
+            return [self._edge_ref(edge_id) for edge_id in ids]
+
+    def remove_edge(
+        self, src=None, dst=None, rel: str | None = None, *, recursive: bool = False, **filters: Any
+    ) -> int:
+        with self._state.lock:
+            try:
+                edges = self.find_edges(src, dst, rel, recursive=recursive, **filters)
+            except NodeNotFoundError:
+                return 0
+            return self._state.store.remove_edges([edge.id for edge in edges])
+
+    def neighbors_out(self, node, rel: str | None = None):
+        return self.traversal_ops.neighbors_out(node, rel)
+
+    def neighbors_in(self, node, rel: str | None = None):
+        return self.traversal_ops.neighbors_in(node, rel)
+
+    def neighbors(self, node, rel: str | None = None):
+        return self.traversal_ops.neighbors(node, rel)
+
+    def degree(self, node) -> tuple[int, int, int]:
+        return self.traversal_ops.degree(node)
+
+    def bfs(self, start, **options):
+        return self.traversal_ops.bfs(start, **options)
+
+    def dfs(self, start, **options):
+        return self.traversal_ops.dfs(start, **options)
+
+    def shortest_path(self, start, end, **options):
+        return self.traversal_ops.shortest_path(start, end, **options)
+
+    def build_node_index(self, attr_name: str) -> None:
+        self.index_manager.create_node_index(attr_name)
+
+    def drop_node_index(self, attr_name: str) -> None:
+        self.index_manager.drop_node_index(attr_name)
+
+    def get_index_stats(self) -> dict[str, Any]:
+        return self.index_manager.get_index_statistics()
+
+    def create_subgraph_view(self, name: str, node_filter=None, **filters: Any) -> SubgraphView:
+        with self._state.lock:
+            self._guard()
+            ids = self._native_call(
+                self._state.store.find_nodes, self._scope, self._parse_filters(filters)
+            )
+            if node_filter is not None:
+                ids = [
+                    nid
+                    for nid in ids
+                    if node_filter(self._display_id(nid), self._state.store.get_node(nid))
+                ]
+            view = SubgraphView(self, ids)
+            self._subgraph_views[name] = view
+            return view
+
+    def get_subgraph_view(self, name: str) -> SubgraphView | None:
+        self._guard()
+        return self._subgraph_views.get(name)
+
+    def stats(self, *, recursive: bool = False, detailed: bool = False) -> dict[str, Any]:
+        with self._state.lock:
+            self._guard()
+            stats = self._state.store.stats(self._scope, recursive=recursive)
+            stats.update(
+                {
                     "name": self.name,
-                    "created_at": time.time(),
-                    "version": self.config.get("engine.version", "2.0.0")
+                    "backend": "rust",
+                    "indexes": len(self._state.store.index_names(self._scope)),
                 }
-            }
-            self._edges.clear()
-            self._out_edges.clear()
-            self._in_edges.clear()
-            self._rel_index.clear()
-            self.index_manager.node_indexes.clear()
+            )
+            if detailed:
+                stats["components"] = len(
+                    self._state.store.connected_components(self._scope, recursive=recursive)
+                )
+                stats["memory"] = self.memory_usage_estimate()
+            return stats
+
+    def memory_usage_estimate(self) -> dict[str, Any]:
+        with self._state.lock:
+            self._guard()
+            stats = self._state.store.memory_usage()
+            stats["kind"] = "native capacity estimate; not process RSS"
+            stats["scope"] = "whole shared store"
+            return stats
+
+    def clear(self) -> None:
+        with self._state.lock:
+            self._guard()
+            self._state.store.clear_scope(self._scope)
             self._subgraph_views.clear()
-            self.clear_cache()
-            
-            # Reset metrics
-            self._metrics = {key: 0 for key in self._metrics}
-    
-    def memory_usage_estimate(self) -> Dict[str, int]:
+
+    def clear_cache(self) -> None:
+        """No query-result cache is retained; calls always observe current state."""
+        self._guard()
+
+    @contextmanager
+    def transaction(self) -> Iterator[FastGraph]:
+        """Serializable in-memory transaction with rollback; not a durable commit.
+
+        A private native snapshot is copied once on entry. All scopes share the
+        lock, so other Python graph handles cannot observe intermediate writes.
+        Rollback invalidates node and child-graph handles acquired before it.
         """
-        Estimate memory usage in bytes.
-        
-        Returns:
-            Dictionary of memory usage by component
-        """
-        import sys
-        
-        return {
-            "nodes_bytes": sum(sys.getsizeof(str(k)) + sys.getsizeof(v) 
-                             for k, v in self.graph["nodes"].items()),
-            "edges_bytes": sum(sys.getsizeof(e) for e in self._edges.values()),
-            "indexes_bytes": sum(sys.getsizeof(idx) for idx in self.index_manager.node_indexes.values()),
-            "adjacency_bytes": sys.getsizeof(self._out_edges) + sys.getsizeof(self._in_edges),
-            "total_bytes": 0  # Would sum all above
-        }
-    
-    def __repr__(self) -> str:
-        """String representation."""
-        return f"FastGraph(name='{self.name}', nodes={len(self.graph['nodes'])}, edges={len(self._edges)})"
-    
-    def __str__(self) -> str:
-        """String representation."""
-        return f"FastGraph '{self.name}' with {len(self.graph['nodes'])} nodes and {len(self._edges)} edges"
-    
+        with self._state.lock:
+            self._guard()
+            if self._state.transaction_depth:
+                raise ValidationError("Nested transactions are not supported")
+            before = self._state.store.clone()
+            metadata = deepcopy(self._state.metadata)
+            self._state.transaction_depth = 1
+            try:
+                yield self
+            except BaseException:
+                self._state.store = before
+                self._state.metadata = metadata
+                self._state.epoch += 1
+                self._epoch = self._state.epoch
+                raise
+            finally:
+                self._state.transaction_depth = 0
+
+    def snapshot(self) -> dict[str, Any]:
+        """Return a detached, versioned snapshot of the entire scope hierarchy."""
+        with self._state.lock:
+            self._guard()
+            return {
+                "format": "fastgraph",
+                "version": 3,
+                "metadata": deepcopy(self._state.metadata),
+                "store": json.loads(self._state.store.snapshot()),
+            }
+
+    def _default_path(self, format: str | None = None) -> Path:
+        name = self._state.metadata["name"]
+        if Path(name).name != name or name in {".", ".."} or "/" in name or "\\" in name:
+            raise PersistenceError("An explicit path is required for this graph name")
+        directory = Path(self.config.get("storage.data_dir", "~/.fastgraph/graphs")).expanduser()
+        fmt = format or self.config.get("storage.default_format", "msgpack")
+        return directory / f"{name}.{fmt}"
+
+    def save(self, path=None, format: str | None = None, **options) -> Path:
+        with self._state.lock:
+            self._guard()
+            if self._state.transaction_depth:
+                raise PersistenceError(
+                    "Save after the in-memory transaction commits", operation="save"
+                )
+            target = self._default_path(format) if path is None else Path(path).expanduser()
+            fmt = format or self.persistence_manager.detect_format(target) or "msgpack"
+            return self.persistence_manager.save(self.snapshot(), target, format=fmt, **options)
+
+    def load(self, path=None, format: str | None = None, **options) -> Path:
+        with self._state.lock:
+            self._guard()
+            if self._scope != 0 or self._state.transaction_depth:
+                raise PersistenceError(
+                    "Load requires the root outside a transaction", operation="load"
+                )
+            target = self._default_path(format) if path is None else Path(path).expanduser()
+            data = self.persistence_manager.load(target, format=format, **options)
+            try:
+                encoded = json.dumps(data["store"], ensure_ascii=False, allow_nan=False).encode(
+                    "utf-8"
+                )
+                replacement = NativeStore.from_snapshot(encoded)
+            except (ValueError, TypeError, KeyError, OverflowError) as exc:
+                raise PersistenceError(
+                    f"Invalid graph snapshot: {exc}", str(target), "load"
+                ) from exc
+            metadata = data["metadata"]
+            if not isinstance(metadata.get("name"), str) or not metadata["name"]:
+                raise PersistenceError(
+                    "Snapshot metadata requires a graph name", str(target), "load"
+                )
+            self._state.store = replacement
+            self._state.metadata = deepcopy(metadata)
+            self._state.epoch += 1
+            self._epoch = self._state.epoch
+            self._subgraph_views.clear()
+            return target
+
+    @classmethod
+    def from_file(cls, path, format: str | None = None, config=None, **options) -> FastGraph:
+        graph = cls(config=config)
+        graph.load(path, format=format, **options)
+        return graph
+
+    @classmethod
+    def load_graph(
+        cls, path_hint=None, graph_name: str | None = None, config=None, **options
+    ) -> FastGraph:
+        graph = cls(name=graph_name or "fastgraph", config=config)
+        graph.load(path_hint, **options)
+        return graph
+
+    @classmethod
+    def with_config(cls, config, name: str | None = None, **options) -> FastGraph:
+        return cls(name=name, config=config, **options)
+
+    def exists(self, path_hint=None) -> bool:
+        with self._state.lock:
+            self._guard()
+            return (
+                self._default_path() if path_hint is None else Path(path_hint).expanduser()
+            ).is_file()
+
+    def translate(
+        self, source_path, target_path, source_format=None, target_format=None, **options
+    ) -> Path:
+        self._guard()
+        return self.persistence_manager.translate(
+            source_path, target_path, source_format, target_format, **options
+        )
+
+    def backup(self, backup_dir=None) -> list[Path]:
+        with self._state.lock:
+            self._guard()
+            directory = (
+                Path(backup_dir)
+                if backup_dir is not None
+                else Path(self.config.get("storage.backup_directory", "~/.fastgraph/backups"))
+            ).expanduser()
+            prefix = self._state.metadata["name"]
+            if Path(prefix).name != prefix or "/" in prefix or "\\" in prefix:
+                raise PersistenceError("A simple graph name is required for backups")
+            path = directory / f"{prefix}.{time.time_ns()}.{uuid4().hex}.msgpack"
+            return [self.save(path, format="msgpack")]
+
+    def restore_from_backup(self, backup_dir=None, format=None) -> Path:
+        directory = (
+            Path(backup_dir)
+            if backup_dir is not None
+            else Path(self.config.get("storage.backup_directory", "~/.fastgraph/backups"))
+        ).expanduser()
+        candidates = sorted(
+            directory.glob(f"{self.name}.*.{format or 'msgpack'}"),
+            key=lambda path: path.stat().st_mtime_ns,
+            reverse=True,
+        )
+        if not candidates:
+            raise PersistenceError("No backup found", operation="restore")
+        return self.load(candidates[0], format=format)
+
+    def close(self) -> None:
+        with self._state.lock:
+            if self._scope == 0:
+                if self._state.transaction_depth:
+                    raise ValidationError("Cannot close a store during a transaction")
+                self._state.closed = True
+                self._state.store = None
+            self._closed = True
+
+    def cleanup(self) -> None:
+        self.close()
+
+    def __enter__(self) -> FastGraph:
+        self._guard()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> bool:
+        try:
+            if (
+                exc_type is None
+                and self._scope == 0
+                and (
+                    self.config.get("enhanced_api.auto_save", False)
+                    or self.config.get("persistence.auto_save_on_exit", False)
+                )
+            ):
+                self.save()
+        finally:
+            self.close()
+        return False
+
+    def __getitem__(self, node) -> NodeRef:
+        return self.resolve(node)
+
+    def __contains__(self, node) -> bool:
+        with self._state.lock:
+            try:
+                self._resolve_id(node)
+                return True
+            except NodeNotFoundError:
+                return False
+
     def __len__(self) -> int:
-        """Return number of nodes."""
-        return len(self.graph["nodes"])
-    
-    def __contains__(self, node_id: NodeId) -> bool:
-        """Check if node exists using 'in' operator."""
-        return node_id in self.graph["nodes"]
-    
-    def __iter__(self) -> Iterator[NodeId]:
-        """Iterate over node IDs."""
-        return iter(self.graph["nodes"].keys())
+        return self.node_count
+
+    def __iter__(self):
+        return iter(self.node_ids())
+
+    def __repr__(self) -> str:
+        if self._closed or self._state.closed:
+            return "FastGraph(closed=True)"
+        try:
+            return f"FastGraph(name={self.name!r}, path={self.path!r}, nodes={self.node_count}, edges={self.edge_count}, backend='rust')"
+        except StaleReferenceError:
+            return "FastGraph(stale=True)"

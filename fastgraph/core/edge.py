@@ -35,8 +35,12 @@ class Edge:
         return self.src, self.dst, self.rel
 
     def to_dict(self) -> dict[str, Any]:
-        return {"src": self.src, "dst": self.dst, "rel": self.rel,
-                "attrs": deepcopy(dict(self.attrs))}
+        return {
+            "src": self.src,
+            "dst": self.dst,
+            "rel": self.rel,
+            "attrs": deepcopy(dict(self.attrs)),
+        }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Edge:

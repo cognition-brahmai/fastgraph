@@ -47,16 +47,21 @@ class IndexManager:
         with graph._state.lock:
             if not self.has_index(attr_name):
                 raise IndexingError(f"No index on '{attr_name}'", index_name=attr_name)
-            ids = graph._native_call(graph._state.store.find_nodes, graph._scope,
-                                     [(attr_name, "eq", value)])
+            ids = graph._native_call(
+                graph._state.store.find_nodes, graph._scope, [(attr_name, "eq", value)]
+            )
             return {graph._display_id(nid) for nid in ids}
 
     def query_by_index_range(self, attr_name: str, min_val: Any, max_val: Any) -> set:
         graph = self._get_graph()
         if not self.has_index(attr_name):
             raise IndexingError(f"No index on '{attr_name}'", index_name=attr_name)
-        return {nid for nid, _ in graph.find_nodes(
-            **{f"{attr_name}__gte": min_val, f"{attr_name}__lte": max_val})}
+        return {
+            nid
+            for nid, _ in graph.find_nodes(
+                **{f"{attr_name}__gte": min_val, f"{attr_name}__lte": max_val}
+            )
+        }
 
     def rebuild_all_indexes(self) -> None:
         for name in self.indexed_attributes:
@@ -64,5 +69,9 @@ class IndexManager:
 
     def get_index_statistics(self) -> dict[str, Any]:
         names = sorted(self.indexed_attributes)
-        return {"attributes": names, "global": {"total_indexes": len(names)},
-                "kind": "native equality", "range_strategy": "filtered scan"}
+        return {
+            "attributes": names,
+            "global": {"total_indexes": len(names)},
+            "kind": "native equality",
+            "range_strategy": "filtered scan",
+        }

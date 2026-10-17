@@ -105,8 +105,12 @@ class NodeRef:
         return hash((id(self._state), self._epoch, self._id))
 
     def __eq__(self, other: object) -> bool:
-        return (isinstance(other, NodeRef) and self._state is other._state
-                and self._epoch == other._epoch and self._id == other._id)
+        return (
+            isinstance(other, NodeRef)
+            and self._state is other._state
+            and self._epoch == other._epoch
+            and self._id == other._id
+        )
 
     def __repr__(self) -> str:
         try:

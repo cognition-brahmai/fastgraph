@@ -1,26 +1,16 @@
-"""
-FastGraph v2: High-Performance In-Memory Graph Database
-
-A fast, memory-efficient graph database with:
-- O(1) edge lookups using adjacency lists
-- Automatic indexing for fast queries
-- Batch operations for bulk data
-- Memory-efficient subgraph views
-- Compressed persistence with msgpack
-- Configuration-driven setup
-- CLI tools for common operations
-"""
+"""FastGraph: embedded native property graphs and compound-node traversal."""
 
 from __future__ import annotations
 
-__version__ = "2.0.0"
-__author__ = "FastGraph Team"
+__version__ = "3.0.0"
+__author__ = "BRAHMAI"
 __email__ = "hello@brahmai.in"
-__description__ = "High-performance in-memory graph database"
+__description__ = "Embedded native property graphs with scoped, nested traversal"
 
 # Core exports
 from .core.graph import FastGraph
 from .core.edge import Edge
+from .core.node import NodeRef
 from .core.subgraph import SubgraphView
 
 # Configuration exports
@@ -36,6 +26,9 @@ from .exceptions import (
     IndexNotFoundError,
     PersistenceError,
     CLIError,
+    ValidationError,
+    ClosedGraphError,
+    StaleReferenceError,
 )
 
 # Type exports
@@ -44,28 +37,28 @@ from .types import NodeId, NodeAttrs
 __all__ = [
     # Version info
     "__version__",
-    "__author__", 
+    "__author__",
     "__email__",
     "__description__",
-    
     # Core classes
     "FastGraph",
-    "Edge", 
+    "Edge",
+    "NodeRef",
     "SubgraphView",
-    
     # Configuration
     "ConfigManager",
     "get_default_config",
-    
     # Exceptions
     "FastGraphError",
     "ConfigurationError",
-    "NodeNotFoundError", 
+    "NodeNotFoundError",
     "EdgeNotFoundError",
     "IndexNotFoundError",
     "PersistenceError",
     "CLIError",
-    
+    "ValidationError",
+    "ClosedGraphError",
+    "StaleReferenceError",
     # Types
     "NodeId",
     "NodeAttrs",
@@ -73,4 +66,5 @@ __all__ = [
 
 # Initialize logging
 import logging
+
 logging.getLogger(__name__).addHandler(logging.NullHandler())

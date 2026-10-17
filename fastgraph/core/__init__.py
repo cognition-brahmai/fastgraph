@@ -12,6 +12,7 @@ This module contains the core graph database components including:
 
 from .graph import FastGraph
 from .edge import Edge
+from .node import NodeRef
 from .subgraph import SubgraphView
 from .indexing import IndexManager
 from .traversal import TraversalOperations
@@ -19,7 +20,8 @@ from .traversal import TraversalOperations
 __all__ = [
     "FastGraph",
     "Edge",
-    "SubgraphView", 
+    "NodeRef",
+    "SubgraphView",
     "IndexManager",
     "TraversalOperations",
 ]
