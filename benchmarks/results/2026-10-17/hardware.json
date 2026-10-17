@@ -1,0 +1,30 @@
+{
+  "captured_date": "2026-10-17",
+  "cpu": {
+    "model": "AMD Ryzen AI 9 365 w/ Radeon 880M",
+    "physical_cores": 10,
+    "logical_processors": 20,
+    "source": "Get-CimInstance Win32_Processor"
+  },
+  "power_policy": {
+    "name": "Performance",
+    "guid": "6fecc5ae-f350-48a5-b669-b472cb895ccf",
+    "source": "powercfg /GETACTIVESCHEME"
+  },
+  "storage": {
+    "model": "MTFDKBK1T0QFM-1BD1AABGB",
+    "disk_bytes": 1024203640320,
+    "filesystem": "NTFS",
+    "volume_bytes": 1022476939264,
+    "volume_free_bytes_at_capture": 232670789632,
+    "source": "Get-CimInstance Win32_DiskDrive; Get-Volume -DriveLetter C"
+  },
+  "build": {
+    "rustc": "1.90.0 (1159e78c4 2025-09-14)",
+    "cargo": "1.90.0 (840b83a10 2025-07-30)",
+    "profile": "release",
+    "dependency_resolution": "Cargo.lock, --locked",
+    "wheel": "fastgx-3.0.0-cp310-abi3-win_amd64.whl",
+    "wheel_sha256": "5d82e802cf174739291c92552b2cab24c7cfec09440d24543d00a062a1df700f"
+  }
+}

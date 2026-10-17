@@ -1,0 +1,1108 @@
+{
+  "environment": {
+    "recorded_utc": "2026-10-17T12:01:52Z",
+    "python": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+    "executable": "C:\\Users\\kstya\\AppData\\Local\\Temp\\kilo\\fastgraph-benchmark-20261017\\Scripts\\python.exe",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "physical_cores": 10,
+    "logical_cores": 20,
+    "ram_total_gib": 23.118999481201172,
+    "ram_available_gib": 4.127483367919922,
+    "packages": {
+      "fastgx": "3.0.0",
+      "psutil": "7.2.2",
+      "networkx": "3.6.1",
+      "rustworkx": "0.18.1",
+      "igraph": "1.0.0",
+      "msgpack": "1.2.3",
+      "numpy": "2.4.6",
+      "maturin": "1.15.0"
+    },
+    "seed": 20261017,
+    "source_sha256": {
+      "native/src/lib.rs": "f9a55416dfc576a850c88f72afd5b61154640153b9fc44dfb70752ea85a55c10",
+      "Cargo.toml": "d04e89f1dc2b019ce15d62b1d2587b22ae760040f79e848c76af3e8f49e29f1d",
+      "Cargo.lock": "b215c059244818779968eae733a63358369c80670e55fcb352c599c5728ef8ef",
+      "fastgraph/core/graph.py": "d26e2c54b7dc8fdf93503f5000201d4a339d04fcfd3433fe17ddb0c9c0d608c3",
+      "fastgraph/core/traversal.py": "c7ec0cddc431d9e08eb0c64c721dc57be448ca230f564884fd49920d04df5ed0",
+      "fastgraph/core/persistence.py": "218adb0a69ee2daea26b712eacbd99f705ea9b94a2aaec78737802e4d4380239"
+    },
+    "git_commit": "54ab9b5e362996855c35be629ccf78a2a08d4df9",
+    "git_status": "?? benchmarks/_peers.py\n?? benchmarks/in_depth.py\n",
+    "timing": "perf_counter_ns wall; process_time_ns CPU; GC enabled; input generation excluded",
+    "memory": "psutil RSS/private after GC; OS allocator retention included; process peak cumulative",
+    "isolation": "one fresh subprocess at a time, PYTHONHASHSEED=0, no source fastgraph imports",
+    "plan": [
+      {
+        "kind": "flat",
+        "engine": "fastgraph",
+        "repeat": 0,
+        "case": "flat:nodes=200:queries=100:shape=ring:profile=sparse",
+        "nodes": 200,
+        "queries": 100,
+        "shape": "ring",
+        "profile": "sparse"
+      },
+      {
+        "kind": "flat",
+        "engine": "native",
+        "repeat": 0,
+        "case": "flat:nodes=200:queries=100:shape=ring:profile=sparse",
+        "nodes": 200,
+        "queries": 100,
+        "shape": "ring",
+        "profile": "sparse"
+      }
+    ]
+  },
+  "samples": [
+    {
+      "job": {
+        "kind": "flat",
+        "engine": "fastgraph",
+        "repeat": 0,
+        "case": "flat:nodes=200:queries=100:shape=ring:profile=sparse",
+        "nodes": 200,
+        "queries": 100,
+        "shape": "ring",
+        "profile": "sparse",
+        "scratch": "C:\\Users\\kstya\\AppData\\Local\\Temp\\kilo\\fastgraph-benchmark-20261017\\scratch",
+        "started_utc": "2026-10-17T12:01:53Z"
+      },
+      "status": "ok",
+      "pid": 40316,
+      "started_utc": "2026-10-17T12:01:53Z",
+      "import_ms": 259.9353,
+      "module_path": "C:\\Users\\kstya\\AppData\\Local\\Temp\\kilo\\fastgraph-benchmark-20261017\\Lib\\site-packages\\fastgraph\\__init__.py",
+      "native_module": "C:\\Users\\kstya\\AppData\\Local\\Temp\\kilo\\fastgraph-benchmark-20261017\\Lib\\site-packages\\fastgraph\\_native.pyd",
+      "startup_memory": {
+        "rss_mib": 28.01171875,
+        "private_mib": 18.13671875,
+        "peak_rss_mib": 28.01171875,
+        "peak_commit_mib": 18.13671875,
+        "page_faults": 7281
+      },
+      "metrics": {
+        "load_nodes": {
+          "wall_ms": 0.6308,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 1,
+          "wall_samples_ms": [
+            0.6308
+          ],
+          "operations": 200,
+          "per_op_us": 3.1540000000000004,
+          "throughput_per_s": 317057.7045022194,
+          "rss_delta_mib": 0.1640625,
+          "memory_before": {
+            "rss_mib": 31.51171875,
+            "private_mib": 22.27734375,
+            "peak_rss_mib": 31.51171875,
+            "peak_commit_mib": 22.27734375,
+            "page_faults": 8182
+          },
+          "memory_after": {
+            "rss_mib": 31.67578125,
+            "private_mib": 22.33203125,
+            "peak_rss_mib": 31.67578125,
+            "peak_commit_mib": 22.33203125,
+            "page_faults": 8224
+          }
+        },
+        "load_edges": {
+          "wall_ms": 2.1964,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 1,
+          "wall_samples_ms": [
+            2.1964
+          ],
+          "operations": 800,
+          "per_op_us": 2.7455000000000003,
+          "throughput_per_s": 364232.38025860494,
+          "rss_delta_mib": 0.45703125,
+          "memory_before": {
+            "rss_mib": 31.67578125,
+            "private_mib": 22.33203125,
+            "peak_rss_mib": 31.67578125,
+            "peak_commit_mib": 22.33203125,
+            "page_faults": 8224
+          },
+          "memory_after": {
+            "rss_mib": 32.1328125,
+            "private_mib": 22.59375,
+            "peak_rss_mib": 32.1328125,
+            "peak_commit_mib": 22.59375,
+            "page_faults": 8342
+          }
+        },
+        "edge_has_hit": {
+          "wall_ms": 0.1107,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 1,
+          "wall_samples_ms": [
+            0.1107
+          ],
+          "operations": 100,
+          "per_op_us": 1.107,
+          "throughput_per_s": 903342.3667570008,
+          "rss_delta_mib": 0.0,
+          "memory_before": {
+            "rss_mib": 32.20703125,
+            "private_mib": 22.59375,
+            "peak_rss_mib": 32.20703125,
+            "peak_commit_mib": 22.59375,
+            "page_faults": 8361
+          },
+          "memory_after": {
+            "rss_mib": 32.20703125,
+            "private_mib": 22.59375,
+            "peak_rss_mib": 32.20703125,
+            "peak_commit_mib": 22.59375,
+            "page_faults": 8361
+          }
+        },
+        "edge_has_mixed": {
+          "wall_ms": 0.1152,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 1,
+          "wall_samples_ms": [
+            0.1152
+          ],
+          "operations": 100,
+          "per_op_us": 1.1520000000000001,
+          "throughput_per_s": 868055.5555555556,
+          "rss_delta_mib": 0.0,
+          "memory_before": {
+            "rss_mib": 32.20703125,
+            "private_mib": 22.59375,
+            "peak_rss_mib": 32.20703125,
+            "peak_commit_mib": 22.59375,
+            "page_faults": 8361
+          },
+          "memory_after": {
+            "rss_mib": 32.20703125,
+            "private_mib": 22.59375,
+            "peak_rss_mib": 32.20703125,
+            "peak_commit_mib": 22.59375,
+            "page_faults": 8361
+          }
+        },
+        "edge_get_hit": {
+          "wall_ms": 0.3859,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 1,
+          "wall_samples_ms": [
+            0.3859
+          ],
+          "operations": 100,
+          "per_op_us": 3.8590000000000004,
+          "throughput_per_s": 259134.49080072556,
+          "rss_delta_mib": 0.0,
+          "memory_before": {
+            "rss_mib": 32.21875,
+            "private_mib": 22.59375,
+            "peak_rss_mib": 32.21875,
+            "peak_commit_mib": 22.59375,
+            "page_faults": 8364
+          },
+          "memory_after": {
+            "rss_mib": 32.21875,
+            "private_mib": 22.59375,
+            "peak_rss_mib": 32.21875,
+            "peak_commit_mib": 22.59375,
+            "page_faults": 8364
+          }
+        },
+        "edge_get_detached": {
+          "wall_ms": 0.3859,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 1,
+          "wall_samples_ms": [
+            0.3859
+          ],
+          "operations": 100,
+          "per_op_us": 3.8590000000000004,
+          "throughput_per_s": 259134.49080072556,
+          "rss_delta_mib": 0.0,
+          "memory_before": {
+            "rss_mib": 32.21875,
+            "private_mib": 22.59375,
+            "peak_rss_mib": 32.21875,
+            "peak_commit_mib": 22.59375,
+            "page_faults": 8364
+          },
+          "memory_after": {
+            "rss_mib": 32.21875,
+            "private_mib": 22.59375,
+            "peak_rss_mib": 32.21875,
+            "peak_commit_mib": 22.59375,
+            "page_faults": 8364
+          },
+          "alias_of": "edge_get_hit"
+        },
+        "node_get": {
+          "wall_ms": 0.2373,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 1,
+          "wall_samples_ms": [
+            0.2373
+          ],
+          "operations": 100,
+          "per_op_us": 2.373,
+          "throughput_per_s": 421407.50105351873,
+          "rss_delta_mib": 0.0078125,
+          "memory_before": {
+            "rss_mib": 32.21875,
+            "private_mib": 22.59375,
+            "peak_rss_mib": 32.21875,
+            "peak_commit_mib": 22.59375,
+            "page_faults": 8364
+          },
+          "memory_after": {
+            "rss_mib": 32.2265625,
+            "private_mib": 22.59375,
+            "peak_rss_mib": 32.2265625,
+            "peak_commit_mib": 22.59375,
+            "page_faults": 8366
+          }
+        },
+        "neighbors_ids": {
+          "wall_ms": 0.5455,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 1,
+          "wall_samples_ms": [
+            0.5455
+          ],
+          "operations": 100,
+          "per_op_us": 5.455,
+          "throughput_per_s": 183318.05682859762,
+          "rss_delta_mib": 0.015625,
+          "memory_before": {
+            "rss_mib": 32.296875,
+            "private_mib": 22.66015625,
+            "peak_rss_mib": 32.296875,
+            "peak_commit_mib": 22.66015625,
+            "page_faults": 8384
+          },
+          "memory_after": {
+            "rss_mib": 32.3125,
+            "private_mib": 22.66015625,
+            "peak_rss_mib": 32.3125,
+            "peak_commit_mib": 22.66015625,
+            "page_faults": 8388
+          }
+        },
+        "degree": {
+          "wall_ms": 0.3598,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 1,
+          "wall_samples_ms": [
+            0.3598
+          ],
+          "operations": 100,
+          "per_op_us": 3.5980000000000003,
+          "throughput_per_s": 277932.18454697053,
+          "rss_delta_mib": 0.0,
+          "memory_before": {
+            "rss_mib": 32.3125,
+            "private_mib": 22.66015625,
+            "peak_rss_mib": 32.3125,
+            "peak_commit_mib": 22.66015625,
+            "page_faults": 8388
+          },
+          "memory_after": {
+            "rss_mib": 32.3125,
+            "private_mib": 22.66015625,
+            "peak_rss_mib": 32.3125,
+            "peak_commit_mib": 22.66015625,
+            "page_faults": 8388
+          }
+        },
+        "counts": {
+          "wall_ms": 0.00255,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 20,
+          "wall_samples_ms": [
+            0.0236,
+            0.0041,
+            0.0027,
+            0.0025,
+            0.0029,
+            0.0057,
+            0.0028,
+            0.0026,
+            0.0026,
+            0.0024,
+            0.0024,
+            0.0024,
+            0.0024,
+            0.0024,
+            0.0032,
+            0.0049,
+            0.0024,
+            0.0024,
+            0.0025,
+            0.0022
+          ],
+          "operations": 1,
+          "per_op_us": 2.5500000000000003,
+          "throughput_per_s": 392156.862745098,
+          "rss_delta_mib": 0.0,
+          "memory_before": {
+            "rss_mib": 32.3125,
+            "private_mib": 22.66015625,
+            "peak_rss_mib": 32.3125,
+            "peak_commit_mib": 22.66015625,
+            "page_faults": 8388
+          },
+          "memory_after": {
+            "rss_mib": 32.3125,
+            "private_mib": 22.66015625,
+            "peak_rss_mib": 32.3125,
+            "peak_commit_mib": 22.66015625,
+            "page_faults": 8388
+          }
+        },
+        "edge_has_latency": {
+          "operations": 100,
+          "p50_us": 1.4,
+          "p95_us": 1.9,
+          "p99_us": 3.3,
+          "min_us": 0.9,
+          "max_us": 14.8,
+          "timer_overhead_not_subtracted": true,
+          "memory_before": {
+            "rss_mib": 32.3125,
+            "private_mib": 22.66015625,
+            "peak_rss_mib": 32.3125,
+            "peak_commit_mib": 22.66015625,
+            "page_faults": 8388
+          },
+          "memory_after": {
+            "rss_mib": 32.3125,
+            "private_mib": 22.66015625,
+            "peak_rss_mib": 32.3125,
+            "peak_commit_mib": 22.66015625,
+            "page_faults": 8388
+          }
+        },
+        "edge_get_latency": {
+          "operations": 100,
+          "p50_us": 3.4,
+          "p95_us": 3.9,
+          "p99_us": 6.3,
+          "min_us": 2.8,
+          "max_us": 22.7,
+          "timer_overhead_not_subtracted": true,
+          "memory_before": {
+            "rss_mib": 32.3125,
+            "private_mib": 22.66015625,
+            "peak_rss_mib": 32.3125,
+            "peak_commit_mib": 22.66015625,
+            "page_faults": 8388
+          },
+          "memory_after": {
+            "rss_mib": 32.3125,
+            "private_mib": 22.66015625,
+            "peak_rss_mib": 32.3125,
+            "peak_commit_mib": 22.66015625,
+            "page_faults": 8388
+          }
+        },
+        "bfs": {
+          "wall_ms": 0.2169,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 3,
+          "wall_samples_ms": [
+            0.3534,
+            0.2169,
+            0.1871
+          ],
+          "operations": 200,
+          "per_op_us": 1.0845,
+          "throughput_per_s": 922083.9096357768,
+          "rss_delta_mib": 0.0,
+          "memory_before": {
+            "rss_mib": 32.3359375,
+            "private_mib": 22.66015625,
+            "peak_rss_mib": 32.3359375,
+            "peak_commit_mib": 22.66015625,
+            "page_faults": 8394
+          },
+          "memory_after": {
+            "rss_mib": 32.3359375,
+            "private_mib": 22.66015625,
+            "peak_rss_mib": 32.3359375,
+            "peak_commit_mib": 22.66015625,
+            "page_faults": 8394
+          }
+        },
+        "bfs_discovery_edge_hydration": {
+          "wall_ms": 0.7767,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 1,
+          "wall_samples_ms": [
+            0.7767
+          ],
+          "operations": 199,
+          "per_op_us": 3.903015075376884,
+          "throughput_per_s": 256212.17973477536,
+          "rss_delta_mib": 0.0078125,
+          "memory_before": {
+            "rss_mib": 32.3359375,
+            "private_mib": 22.66015625,
+            "peak_rss_mib": 32.3359375,
+            "peak_commit_mib": 22.66015625,
+            "page_faults": 8394
+          },
+          "memory_after": {
+            "rss_mib": 32.34375,
+            "private_mib": 22.66015625,
+            "peak_rss_mib": 32.34375,
+            "peak_commit_mib": 22.66015625,
+            "page_faults": 8396
+          }
+        },
+        "neighbors_hydrated": {
+          "wall_ms": 0.0574,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 1,
+          "wall_samples_ms": [
+            0.0574
+          ],
+          "operations": 4,
+          "per_op_us": 14.35,
+          "throughput_per_s": 69686.41114982578,
+          "rss_delta_mib": 0.0,
+          "memory_before": {
+            "rss_mib": 32.34375,
+            "private_mib": 22.66015625,
+            "peak_rss_mib": 32.34375,
+            "peak_commit_mib": 22.66015625,
+            "page_faults": 8396
+          },
+          "memory_after": {
+            "rss_mib": 32.34375,
+            "private_mib": 22.66015625,
+            "peak_rss_mib": 32.34375,
+            "peak_commit_mib": 22.66015625,
+            "page_faults": 8396
+          }
+        },
+        "shortest_path": {
+          "wall_ms": 0.0781,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 3,
+          "wall_samples_ms": [
+            0.1691,
+            0.0781,
+            0.0632
+          ],
+          "operations": 1,
+          "per_op_us": 78.10000000000001,
+          "throughput_per_s": 12804.097311139563,
+          "rss_delta_mib": 0.01171875,
+          "memory_before": {
+            "rss_mib": 32.34375,
+            "private_mib": 22.66015625,
+            "peak_rss_mib": 32.34375,
+            "peak_commit_mib": 22.66015625,
+            "page_faults": 8396
+          },
+          "memory_after": {
+            "rss_mib": 32.35546875,
+            "private_mib": 22.66015625,
+            "peak_rss_mib": 32.35546875,
+            "peak_commit_mib": 22.66015625,
+            "page_faults": 8399
+          }
+        },
+        "dfs": {
+          "wall_ms": 1.5438,
+          "cpu_ms": 15.625,
+          "repeats_in_process": 1,
+          "wall_samples_ms": [
+            1.5438
+          ],
+          "operations": 200,
+          "per_op_us": 7.718999999999999,
+          "throughput_per_s": 129550.45990413266,
+          "rss_delta_mib": 0.02734375,
+          "memory_before": {
+            "rss_mib": 32.35546875,
+            "private_mib": 22.66015625,
+            "peak_rss_mib": 32.35546875,
+            "peak_commit_mib": 22.66015625,
+            "page_faults": 8399
+          },
+          "memory_after": {
+            "rss_mib": 32.3828125,
+            "private_mib": 22.68359375,
+            "peak_rss_mib": 32.3828125,
+            "peak_commit_mib": 22.68359375,
+            "page_faults": 8406
+          }
+        },
+        "bfs_property_filter": {
+          "wall_ms": 0.5788,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 1,
+          "wall_samples_ms": [
+            0.5788
+          ],
+          "operations": 200,
+          "per_op_us": 2.8939999999999997,
+          "throughput_per_s": 345542.5017277125,
+          "rss_delta_mib": 0.0078125,
+          "memory_before": {
+            "rss_mib": 32.3828125,
+            "private_mib": 22.68359375,
+            "peak_rss_mib": 32.3828125,
+            "peak_commit_mib": 22.68359375,
+            "page_faults": 8406
+          },
+          "memory_after": {
+            "rss_mib": 32.390625,
+            "private_mib": 22.68359375,
+            "peak_rss_mib": 32.390625,
+            "peak_commit_mib": 22.68359375,
+            "page_faults": 8408
+          }
+        },
+        "bfs_edge_callback": {
+          "wall_ms": 1.5015,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 1,
+          "wall_samples_ms": [
+            1.5015
+          ],
+          "operations": 200,
+          "per_op_us": 7.5075,
+          "throughput_per_s": 133200.1332001332,
+          "rss_delta_mib": 0.00390625,
+          "memory_before": {
+            "rss_mib": 32.390625,
+            "private_mib": 22.68359375,
+            "peak_rss_mib": 32.390625,
+            "peak_commit_mib": 22.68359375,
+            "page_faults": 8408
+          },
+          "memory_after": {
+            "rss_mib": 32.39453125,
+            "private_mib": 22.68359375,
+            "peak_rss_mib": 32.39453125,
+            "peak_commit_mib": 22.68359375,
+            "page_faults": 8409
+          }
+        }
+      },
+      "details": {
+        "nodes": 200,
+        "edges": 800,
+        "expected_reachable": 200,
+        "input_generation_ms": 0.9902,
+        "baseline_memory": {
+          "rss_mib": 31.015625,
+          "private_mib": 21.234375,
+          "peak_rss_mib": 31.015625,
+          "peak_commit_mib": 21.234375,
+          "page_faults": 8055
+        },
+        "loaded_memory": {
+          "rss_mib": 32.140625,
+          "private_mib": 22.59375,
+          "peak_rss_mib": 32.140625,
+          "peak_commit_mib": 22.59375,
+          "page_faults": 8344
+        },
+        "retained_rss_delta_mib": 1.125,
+        "retained_private_delta_mib": 1.359375,
+        "native_estimate": {
+          "edges_bytes": 119333,
+          "indexes_bytes": 0,
+          "nodes_bytes": 44243,
+          "properties_bytes": 57715,
+          "total_bytes": 221291
+        },
+        "shortest_path_length": 7,
+        "final_memory": {
+          "rss_mib": 32.39453125,
+          "private_mib": 22.68359375,
+          "peak_rss_mib": 32.39453125,
+          "peak_commit_mib": 22.68359375,
+          "page_faults": 8409
+        }
+      },
+      "final_memory": {
+        "rss_mib": 32.39453125,
+        "private_mib": 22.68359375,
+        "peak_rss_mib": 32.39453125,
+        "peak_commit_mib": 22.68359375,
+        "page_faults": 8409
+      },
+      "available_ram_before_gib": 4.104518890380859,
+      "available_ram_after_gib": 4.269054412841797,
+      "returncode": 0,
+      "worker_wall_s": 0.7991748999993433
+    },
+    {
+      "job": {
+        "kind": "flat",
+        "engine": "native",
+        "repeat": 0,
+        "case": "flat:nodes=200:queries=100:shape=ring:profile=sparse",
+        "nodes": 200,
+        "queries": 100,
+        "shape": "ring",
+        "profile": "sparse",
+        "scratch": "C:\\Users\\kstya\\AppData\\Local\\Temp\\kilo\\fastgraph-benchmark-20261017\\scratch",
+        "started_utc": "2026-10-17T12:01:54Z"
+      },
+      "status": "ok",
+      "pid": 33692,
+      "started_utc": "2026-10-17T12:01:54Z",
+      "import_ms": 132.2048,
+      "module_path": "C:\\Users\\kstya\\AppData\\Local\\Temp\\kilo\\fastgraph-benchmark-20261017\\Lib\\site-packages\\fastgraph\\__init__.py",
+      "native_module": "C:\\Users\\kstya\\AppData\\Local\\Temp\\kilo\\fastgraph-benchmark-20261017\\Lib\\site-packages\\fastgraph\\_native.pyd",
+      "startup_memory": {
+        "rss_mib": 28.17578125,
+        "private_mib": 18.28125,
+        "peak_rss_mib": 28.17578125,
+        "peak_commit_mib": 18.28125,
+        "page_faults": 7325
+      },
+      "metrics": {
+        "load_nodes": {
+          "wall_ms": 93.9444,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 1,
+          "wall_samples_ms": [
+            93.9444
+          ],
+          "operations": 200,
+          "per_op_us": 469.72200000000004,
+          "throughput_per_s": 2128.918807294527,
+          "rss_delta_mib": 0.1484375,
+          "memory_before": {
+            "rss_mib": 31.6953125,
+            "private_mib": 22.46875,
+            "peak_rss_mib": 31.6953125,
+            "peak_commit_mib": 22.46875,
+            "page_faults": 8231
+          },
+          "memory_after": {
+            "rss_mib": 31.84375,
+            "private_mib": 22.515625,
+            "peak_rss_mib": 31.84375,
+            "peak_commit_mib": 22.515625,
+            "page_faults": 8269
+          }
+        },
+        "load_edges": {
+          "wall_ms": 2.0268,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 1,
+          "wall_samples_ms": [
+            2.0268
+          ],
+          "operations": 800,
+          "per_op_us": 2.5335,
+          "throughput_per_s": 394710.8742845865,
+          "rss_delta_mib": 0.3359375,
+          "memory_before": {
+            "rss_mib": 31.84375,
+            "private_mib": 22.515625,
+            "peak_rss_mib": 31.84375,
+            "peak_commit_mib": 22.515625,
+            "page_faults": 8269
+          },
+          "memory_after": {
+            "rss_mib": 32.1796875,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.1796875,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8355
+          }
+        },
+        "edge_has_hit": {
+          "wall_ms": 0.1172,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 1,
+          "wall_samples_ms": [
+            0.1172
+          ],
+          "operations": 100,
+          "per_op_us": 1.172,
+          "throughput_per_s": 853242.3208191126,
+          "rss_delta_mib": 0.0,
+          "memory_before": {
+            "rss_mib": 32.34765625,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.34765625,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8398
+          },
+          "memory_after": {
+            "rss_mib": 32.34765625,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.34765625,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8398
+          }
+        },
+        "edge_has_mixed": {
+          "wall_ms": 0.1595,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 1,
+          "wall_samples_ms": [
+            0.1595
+          ],
+          "operations": 100,
+          "per_op_us": 1.595,
+          "throughput_per_s": 626959.2476489028,
+          "rss_delta_mib": 0.0,
+          "memory_before": {
+            "rss_mib": 32.34765625,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.34765625,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8398
+          },
+          "memory_after": {
+            "rss_mib": 32.34765625,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.34765625,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8398
+          }
+        },
+        "edge_get_hit": {
+          "wall_ms": 0.2283,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 1,
+          "wall_samples_ms": [
+            0.2283
+          ],
+          "operations": 100,
+          "per_op_us": 2.283,
+          "throughput_per_s": 438020.14892685064,
+          "rss_delta_mib": 0.0,
+          "memory_before": {
+            "rss_mib": 32.359375,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.359375,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8401
+          },
+          "memory_after": {
+            "rss_mib": 32.359375,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.359375,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8401
+          }
+        },
+        "edge_get_detached": {
+          "wall_ms": 0.2283,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 1,
+          "wall_samples_ms": [
+            0.2283
+          ],
+          "operations": 100,
+          "per_op_us": 2.283,
+          "throughput_per_s": 438020.14892685064,
+          "rss_delta_mib": 0.0,
+          "memory_before": {
+            "rss_mib": 32.359375,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.359375,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8401
+          },
+          "memory_after": {
+            "rss_mib": 32.359375,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.359375,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8401
+          },
+          "alias_of": "edge_get_hit"
+        },
+        "node_get": {
+          "wall_ms": 0.2003,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 1,
+          "wall_samples_ms": [
+            0.2003
+          ],
+          "operations": 100,
+          "per_op_us": 2.003,
+          "throughput_per_s": 499251.12331502745,
+          "rss_delta_mib": 0.00390625,
+          "memory_before": {
+            "rss_mib": 32.359375,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.359375,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8401
+          },
+          "memory_after": {
+            "rss_mib": 32.36328125,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.36328125,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8402
+          }
+        },
+        "neighbors_ids": {
+          "wall_ms": 0.2169,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 1,
+          "wall_samples_ms": [
+            0.2169
+          ],
+          "operations": 100,
+          "per_op_us": 2.169,
+          "throughput_per_s": 461041.9548178884,
+          "rss_delta_mib": 0.015625,
+          "memory_before": {
+            "rss_mib": 32.37109375,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.37109375,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8404
+          },
+          "memory_after": {
+            "rss_mib": 32.38671875,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.38671875,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8408
+          }
+        },
+        "degree": {
+          "wall_ms": 0.0625,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 1,
+          "wall_samples_ms": [
+            0.0625
+          ],
+          "operations": 100,
+          "per_op_us": 0.625,
+          "throughput_per_s": 1600000.0,
+          "rss_delta_mib": 0.0,
+          "memory_before": {
+            "rss_mib": 32.38671875,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.38671875,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8408
+          },
+          "memory_after": {
+            "rss_mib": 32.38671875,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.38671875,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8408
+          }
+        },
+        "counts": {
+          "wall_ms": 0.0015500000000000002,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 20,
+          "wall_samples_ms": [
+            0.0185,
+            0.0028,
+            0.0021,
+            0.002,
+            0.0016,
+            0.0051,
+            0.0018,
+            0.0017,
+            0.0014,
+            0.0015,
+            0.0013,
+            0.0013,
+            0.0054,
+            0.0022,
+            0.0014,
+            0.0014,
+            0.0014,
+            0.0014,
+            0.0013,
+            0.0015
+          ],
+          "operations": 1,
+          "per_op_us": 1.5500000000000003,
+          "throughput_per_s": 645161.2903225806,
+          "rss_delta_mib": 0.0,
+          "memory_before": {
+            "rss_mib": 32.38671875,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.38671875,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8408
+          },
+          "memory_after": {
+            "rss_mib": 32.38671875,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.38671875,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8408
+          }
+        },
+        "edge_has_latency": {
+          "operations": 100,
+          "p50_us": 0.9,
+          "p95_us": 1.3,
+          "p99_us": 1.4,
+          "min_us": 0.6,
+          "max_us": 6.6,
+          "timer_overhead_not_subtracted": true,
+          "memory_before": {
+            "rss_mib": 32.38671875,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.38671875,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8408
+          },
+          "memory_after": {
+            "rss_mib": 32.38671875,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.38671875,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8408
+          }
+        },
+        "edge_get_latency": {
+          "operations": 100,
+          "p50_us": 1.8,
+          "p95_us": 2.7,
+          "p99_us": 8.6,
+          "min_us": 1.1,
+          "max_us": 10.2,
+          "timer_overhead_not_subtracted": true,
+          "memory_before": {
+            "rss_mib": 32.38671875,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.38671875,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8408
+          },
+          "memory_after": {
+            "rss_mib": 32.38671875,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.38671875,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8408
+          }
+        },
+        "bfs": {
+          "wall_ms": 0.0927,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 3,
+          "wall_samples_ms": [
+            0.1598,
+            0.0927,
+            0.0851
+          ],
+          "operations": 200,
+          "per_op_us": 0.4635,
+          "throughput_per_s": 2157497.303128371,
+          "rss_delta_mib": 0.0,
+          "memory_before": {
+            "rss_mib": 32.3984375,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.3984375,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8411
+          },
+          "memory_after": {
+            "rss_mib": 32.3984375,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.3984375,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8411
+          }
+        },
+        "shortest_path": {
+          "wall_ms": 0.0897,
+          "cpu_ms": 0.0,
+          "repeats_in_process": 3,
+          "wall_samples_ms": [
+            0.1718,
+            0.0525,
+            0.0897
+          ],
+          "operations": 1,
+          "per_op_us": 89.7,
+          "throughput_per_s": 11148.272017837235,
+          "rss_delta_mib": 0.0390625,
+          "memory_before": {
+            "rss_mib": 32.3984375,
+            "private_mib": 22.84375,
+            "peak_rss_mib": 32.3984375,
+            "peak_commit_mib": 22.84375,
+            "page_faults": 8411
+          },
+          "memory_after": {
+            "rss_mib": 32.4375,
+            "private_mib": 22.87890625,
+            "peak_rss_mib": 32.4375,
+            "peak_commit_mib": 22.87890625,
+            "page_faults": 8421
+          }
+        }
+      },
+      "details": {
+        "nodes": 200,
+        "edges": 800,
+        "expected_reachable": 200,
+        "input_generation_ms": 1.5873,
+        "baseline_memory": {
+          "rss_mib": 31.19921875,
+          "private_mib": 21.41015625,
+          "peak_rss_mib": 31.19921875,
+          "peak_commit_mib": 21.41015625,
+          "page_faults": 8104
+        },
+        "loaded_memory": {
+          "rss_mib": 32.1875,
+          "private_mib": 22.84375,
+          "peak_rss_mib": 32.1875,
+          "peak_commit_mib": 22.84375,
+          "page_faults": 8357
+        },
+        "retained_rss_delta_mib": 0.98828125,
+        "retained_private_delta_mib": 1.43359375,
+        "native_estimate": {
+          "edges_bytes": 119333,
+          "indexes_bytes": 0,
+          "nodes_bytes": 44243,
+          "properties_bytes": 57715,
+          "total_bytes": 221291
+        },
+        "shortest_path_length": 7,
+        "final_memory": {
+          "rss_mib": 32.4375,
+          "private_mib": 22.87890625,
+          "peak_rss_mib": 32.4375,
+          "peak_commit_mib": 22.87890625,
+          "page_faults": 8421
+        }
+      },
+      "final_memory": {
+        "rss_mib": 32.4375,
+        "private_mib": 22.87890625,
+        "peak_rss_mib": 32.4375,
+        "peak_commit_mib": 22.87890625,
+        "page_faults": 8421
+      },
+      "available_ram_before_gib": 4.3751983642578125,
+      "available_ram_after_gib": 4.3452911376953125,
+      "returncode": 0,
+      "worker_wall_s": 0.7588816999996197
+    }
+  ]
+}
