@@ -18,13 +18,13 @@ class IndexManager:
         graph = self._graph()
         if graph is None:
             raise StaleReferenceError("The graph owning this index manager no longer exists")
-        graph._guard()
         return graph
 
     @property
     def indexed_attributes(self) -> frozenset[str]:
         graph = self._get_graph()
         with graph._state.lock:
+            graph._guard()
             return frozenset(graph._state.store.index_names(graph._scope))
 
     def has_index(self, attr_name: str) -> bool:
@@ -33,11 +33,13 @@ class IndexManager:
     def create_node_index(self, attr_name: str) -> None:
         graph = self._get_graph()
         with graph._state.lock:
+            graph._guard()
             graph._native_call(graph._state.store.create_index, graph._scope, attr_name)
 
     def drop_node_index(self, attr_name: str) -> None:
         graph = self._get_graph()
         with graph._state.lock:
+            graph._guard()
             if not self.has_index(attr_name):
                 raise IndexingError(f"No index on '{attr_name}'", index_name=attr_name)
             graph._state.store.drop_index(graph._scope, attr_name)
@@ -45,6 +47,7 @@ class IndexManager:
     def query_by_index(self, attr_name: str, value: Any) -> set:
         graph = self._get_graph()
         with graph._state.lock:
+            graph._guard()
             if not self.has_index(attr_name):
                 raise IndexingError(f"No index on '{attr_name}'", index_name=attr_name)
             ids = graph._native_call(

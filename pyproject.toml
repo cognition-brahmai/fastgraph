@@ -35,7 +35,8 @@ manifest-path = "Cargo.toml"
 module-name = "fastgraph._native"
 python-source = "."
 features = ["python-extension"]
-include = ["LICENSE", "README.md", "tests/**/*.py", "examples/nested_graphs.py"]
+include = ["LICENSE", "README.md", "tests/**/*.py", "test_original_code.py", "examples/nested_graphs.py", "benchmarks/graph_engine.py"]
+exclude = ["fastgraph/*.pdb", "fastgraph/*.dll", "fastgraph/**/*.pyc", "fastgraph/**/__pycache__/**"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -45,7 +46,7 @@ markers = ["performance: optional performance measurements"]
 [tool.ruff]
 target-version = "py310"
 line-length = 100
-include = ["fastgraph/core/*.py", "fastgraph/cli/*.py", "fastgraph/__init__.py", "tests/*.py", "examples/nested_graphs.py", "benchmarks/*.py", "run_all_tests.py", "validate_package.py"]
+include = ["fastgraph/core/*.py", "fastgraph/cli/*.py", "fastgraph/__init__.py", "tests/*.py", "examples/nested_graphs.py", "benchmarks/*.py"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]

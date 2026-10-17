@@ -39,7 +39,16 @@ from .traversal import TraversalOperations
 class _GraphState:
     """Shared ownership and one serializable observation boundary for all scopes."""
 
-    __slots__ = ("store", "lock", "epoch", "closed", "config", "metadata", "transaction_depth")
+    __slots__ = (
+        "store",
+        "lock",
+        "epoch",
+        "closed",
+        "config",
+        "metadata",
+        "transaction_depth",
+        "identity",
+    )
 
     def __init__(self, name: str, config: ConfigManager):
         self.store = NativeStore()
@@ -49,6 +58,7 @@ class _GraphState:
         self.config = config
         self.metadata = {"name": name, "created_at": time.time(), "version": "3.0.0"}
         self.transaction_depth = 0
+        self.identity = object()
 
 
 class FastGraph:
@@ -103,10 +113,11 @@ class FastGraph:
     def _guard(self) -> None:
         if self._closed or self._state.closed:
             raise ClosedGraphError("The graph is closed")
-        if self._scope != 0 and self._epoch != self._state.epoch:
-            raise StaleReferenceError("Graph scope predates a load or transaction rollback")
-        if not self._state.store.scope_exists(self._scope):
-            raise StaleReferenceError("The node owning this graph scope was removed")
+        if self._scope != 0:
+            if self._epoch != self._state.epoch:
+                raise StaleReferenceError("Graph scope predates a load or transaction rollback")
+            if not self._state.store.scope_exists(self._scope):
+                raise StaleReferenceError("The node owning this graph scope was removed")
 
     @staticmethod
     def _validate_local_id(value: Any, field: str = "node_id") -> None:
@@ -178,7 +189,14 @@ class FastGraph:
 
     def _edge_ref(self, edge_id: int) -> Edge:
         src, dst, rel, attrs = self._state.store.get_edge(edge_id)
-        return Edge(self._display_id(src), self._display_id(dst), rel, attrs, edge_id)
+        return Edge._from_native(
+            self._display_id(src),
+            self._display_id(dst),
+            rel,
+            attrs,
+            edge_id,
+            (self._state.identity, self._state.epoch, edge_id),
+        )
 
     @property
     def config(self) -> ConfigManager:
@@ -269,7 +287,8 @@ class FastGraph:
     def get_node(self, node) -> dict[str, Any] | None:
         with self._state.lock:
             try:
-                return self._state.store.get_node(self._resolve_id(node))
+                node_id = self._resolve_id(node)
+                return self._state.store.get_node(node_id)
             except NodeNotFoundError:
                 return None
 
@@ -282,12 +301,16 @@ class FastGraph:
             return self._state.store.remove_node(node_id)
 
     def add_edge(self, src, dst, rel: str, **attrs: Any) -> Edge:
-        return self.add_edges_batch([(src, dst, rel, attrs)])[0]
+        with self._state.lock:
+            ids = self.add_edges_batch([(src, dst, rel, attrs)])
+            return self._edge_ref(ids[0])
 
-    def add_edges_batch(self, edges) -> list[Edge]:
+    def add_edges_batch(self, edges) -> list[int]:
+        """Insert atomically and return compact relationship IDs, not hydrated payloads."""
         with self._state.lock:
             self._guard()
             prepared = []
+            local = True
             for edge in edges:
                 if len(edge) not in (3, 4):
                     raise ValidationError("Edges require (source, destination, type[, properties])")
@@ -298,18 +321,67 @@ class FastGraph:
                     attrs = {}
                 if not isinstance(attrs, Mapping):
                     raise ValidationError("Relationship properties must be a mapping")
-                prepared.append((self._resolve_id(src), self._resolve_id(dst), rel, dict(attrs)))
-            ids = self._native_call(self._state.store.add_edges, prepared)
-            return [self._edge_ref(edge_id) for edge_id in ids]
+                local = local and isinstance(src, str) and isinstance(dst, str)
+                prepared.append((src, dst, rel, dict(attrs)))
+            if local:
+                try:
+                    return self._native_call(
+                        self._state.store.add_edges_local, self._scope, prepared
+                    )
+                except KeyError as exc:
+                    raise NodeNotFoundError(str(exc.args[0])) from exc
+            resolved = [
+                (self._resolve_id(src), self._resolve_id(dst), rel, attrs)
+                for src, dst, rel, attrs in prepared
+            ]
+            ids = self._native_call(self._state.store.add_edges, resolved)
+            return ids
 
     def get_edge(self, src, dst, rel: str) -> Edge | None:
         with self._state.lock:
+            self._guard()
+            if isinstance(src, str) and isinstance(dst, str):
+                result = self._state.store.edge_local(self._scope, src, dst, rel)
+                if result is None:
+                    return None
+                edge_id, attrs = result
+                return Edge._from_native(
+                    src,
+                    dst,
+                    rel,
+                    attrs,
+                    edge_id,
+                    (self._state.identity, self._state.epoch, edge_id),
+                )
             try:
                 src_id, dst_id = self._resolve_id(src), self._resolve_id(dst)
             except NodeNotFoundError:
                 return None
             edge_id = self._state.store.edge_id(src_id, dst_id, rel)
             return None if edge_id is None else self._edge_ref(edge_id)
+
+    def has_edge(self, src, dst, rel: str) -> bool:
+        """Check a relationship without materializing its properties."""
+        with self._state.lock:
+            self._guard()
+            if isinstance(src, str) and isinstance(dst, str):
+                return self._state.store.has_edge_local(self._scope, src, dst, rel)
+            try:
+                src_id, dst_id = self._resolve_id(src), self._resolve_id(dst)
+            except NodeNotFoundError:
+                return False
+            return self._state.store.edge_id(src_id, dst_id, rel) is not None
+
+    def neighbor_nodes(
+        self, node, *, direction: str = "out", rel: str | None = None
+    ) -> tuple[NodeRef, ...]:
+        """Select adjacent nodes without hydrating relationship properties."""
+        with self._state.lock:
+            node_id = self._resolve_id(node)
+            neighbors = self._native_call(
+                self._state.store.neighbors, node_id, direction=direction, rel=rel
+            )
+            return tuple(self._node_ref(nid) for nid, _ in neighbors)
 
     def update_edge(self, src, dst, rel: str, **attrs: Any) -> Edge:
         with self._state.lock:
@@ -318,7 +390,8 @@ class FastGraph:
                 raise EdgeNotFoundError(str(src), str(dst), rel)
             properties = dict(edge.attrs)
             properties.update(attrs)
-            return self.add_edge(src, dst, rel, **properties)
+            ids = self.add_edges_batch([(src, dst, rel, properties)])
+            return self._edge_ref(ids[0])
 
     def find_nodes(
         self, *, recursive: bool = False, limit: int | None = None, **filters: Any
@@ -408,6 +481,21 @@ class FastGraph:
     def shortest_path(self, start, end, **options):
         return self.traversal_ops.shortest_path(start, end, **options)
 
+    def all_shortest_paths(self, start, end, **options):
+        return self.traversal_ops.all_shortest_paths(start, end, **options)
+
+    def find_paths(self, start, end, **options):
+        return self.traversal_ops.find_paths(start, end, **options)
+
+    def connected_components(self, *, recursive: bool = False):
+        return self.traversal_ops.connected_components(recursive=recursive)
+
+    def topological_sort(self, *, recursive: bool = False):
+        return self.traversal_ops.topological_sort(recursive=recursive)
+
+    def has_cycles(self, *, recursive: bool = False) -> bool:
+        return self.traversal_ops.has_cycles(recursive=recursive)
+
     def build_node_index(self, attr_name: str) -> None:
         self.index_manager.create_node_index(attr_name)
 
@@ -434,8 +522,9 @@ class FastGraph:
             return view
 
     def get_subgraph_view(self, name: str) -> SubgraphView | None:
-        self._guard()
-        return self._subgraph_views.get(name)
+        with self._state.lock:
+            self._guard()
+            return self._subgraph_views.get(name)
 
     def stats(self, *, recursive: bool = False, detailed: bool = False) -> dict[str, Any]:
         with self._state.lock:
@@ -487,6 +576,7 @@ class FastGraph:
                 raise ValidationError("Nested transactions are not supported")
             before = self._state.store.clone()
             metadata = deepcopy(self._state.metadata)
+            views = dict(self._subgraph_views)
             self._state.transaction_depth = 1
             try:
                 yield self
@@ -495,6 +585,7 @@ class FastGraph:
                 self._state.metadata = metadata
                 self._state.epoch += 1
                 self._epoch = self._state.epoch
+                self._subgraph_views = views
                 raise
             finally:
                 self._state.transaction_depth = 0
@@ -527,6 +618,7 @@ class FastGraph:
                 )
             target = self._default_path(format) if path is None else Path(path).expanduser()
             fmt = format or self.persistence_manager.detect_format(target) or "msgpack"
+            options.setdefault("durable", self.config.get("persistence.durable", True))
             return self.persistence_manager.save(self.snapshot(), target, format=fmt, **options)
 
     def load(self, path=None, format: str | None = None, **options) -> Path:
@@ -537,6 +629,9 @@ class FastGraph:
                     "Load requires the root outside a transaction", operation="load"
                 )
             target = self._default_path(format) if path is None else Path(path).expanduser()
+            options.setdefault(
+                "max_bytes", self.config.get("persistence.max_bytes", 256 * 1024 * 1024)
+            )
             data = self.persistence_manager.load(target, format=format, **options)
             try:
                 encoded = json.dumps(data["store"], ensure_ascii=False, allow_nan=False).encode(
@@ -587,10 +682,15 @@ class FastGraph:
     def translate(
         self, source_path, target_path, source_format=None, target_format=None, **options
     ) -> Path:
-        self._guard()
-        return self.persistence_manager.translate(
-            source_path, target_path, source_format, target_format, **options
-        )
+        with self._state.lock:
+            self._guard()
+            options.setdefault("durable", self.config.get("persistence.durable", True))
+            options.setdefault(
+                "max_bytes", self.config.get("persistence.max_bytes", 256 * 1024 * 1024)
+            )
+            return self.persistence_manager.translate(
+                source_path, target_path, source_format, target_format, **options
+            )
 
     def backup(self, backup_dir=None) -> list[Path]:
         with self._state.lock:

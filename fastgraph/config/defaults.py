@@ -24,21 +24,25 @@ def get_default_config() -> dict:
 def get_config_schema() -> dict:
     return {
         "engine": {
-            "type": "dict", "required": True,
-            "properties": {"name": {"type": "string", "required": True},
-                           "version": {"type": "string", "required": True}},
+            "type": "dict",
+            "required": True,
+            "properties": {
+                "name": {"type": "string", "required": True},
+                "version": {"type": "string", "required": True},
+            },
         },
         "storage": {
-            "type": "dict", "required": True,
+            "type": "dict",
+            "required": True,
             "properties": {
                 "data_dir": {"type": "string", "required": True},
-                "default_format": {"type": "string", "enum": ["msgpack", "json"],
-                                   "required": True},
+                "default_format": {"type": "string", "enum": ["msgpack", "json"], "required": True},
                 "backup_directory": {"type": "string", "required": True},
             },
         },
         "persistence": {
-            "type": "dict", "required": True,
+            "type": "dict",
+            "required": True,
             "properties": {
                 "max_bytes": {"type": "integer", "min": 1},
                 "durable": {"type": "boolean"},
@@ -46,11 +50,16 @@ def get_config_schema() -> dict:
             },
         },
         "enhanced_api": {
-            "type": "dict", "properties": {"auto_save": {"type": "boolean"}},
+            "type": "dict",
+            "properties": {"auto_save": {"type": "boolean"}},
         },
         "cli": {
-            "type": "dict", "properties": {
-                "default_output_format": {"type": "string", "enum": ["table", "json", "yaml", "plain"]},
+            "type": "dict",
+            "properties": {
+                "default_output_format": {
+                    "type": "string",
+                    "enum": ["table", "json", "yaml", "plain"],
+                },
                 "verbose": {"type": "boolean"},
             },
         },
@@ -58,12 +67,18 @@ def get_config_schema() -> dict:
 
 
 def get_env_config_mapping() -> dict[str, str]:
-    return {"FASTGRAPH_DATA_DIR": "storage.data_dir",
-            "FASTGRAPH_DEFAULT_FORMAT": "storage.default_format"}
+    return {
+        "FASTGRAPH_DATA_DIR": "storage.data_dir",
+        "FASTGRAPH_DEFAULT_FORMAT": "storage.default_format",
+    }
 
 
 def get_user_config_paths() -> list[Path]:
     home = Path.home()
-    return [home / ".fastgraph" / "config.yaml", home / ".fastgraph" / "config.yml",
-            home / ".fastgraph" / "config.json", Path.cwd() / "fastgraph.yaml",
-            Path.cwd() / "fastgraph.yml"]
+    return [
+        home / ".fastgraph" / "config.yaml",
+        home / ".fastgraph" / "config.yml",
+        home / ".fastgraph" / "config.json",
+        Path.cwd() / "fastgraph.yaml",
+        Path.cwd() / "fastgraph.yml",
+    ]

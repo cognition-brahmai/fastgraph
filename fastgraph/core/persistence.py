@@ -9,6 +9,7 @@ import json
 import math
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, BinaryIO, Optional
 
@@ -76,21 +77,22 @@ def _payload_format(path: Path, payload: bytes) -> str:
     return format
 
 
-def detect_format(path: Path | str, max_bytes: int = DEFAULT_MAX_BYTES) -> str:
-    """Inspect this file only, or infer a supported suffix for a missing path."""
+def detect_format(path: Path | str, max_bytes: int = DEFAULT_MAX_BYTES) -> Optional[str]:
+    """Use a supported suffix, otherwise inspect this file only if it exists."""
     try:
         path = Path(path)
         _validate_limit(max_bytes)
+        format = _suffix_format(path)
+        if format is not None:
+            return format
         if path.is_file():
             return _payload_format(path, _read_payload(path, max_bytes))
-        format = _suffix_format(path)
-        if format is None:
-            raise ValueError("Cannot detect snapshot format; use a .json or .msgpack suffix")
-        return format
+        return None
     except Exception as exc:
         raise PersistenceError(
             f"Failed to detect snapshot format: {exc}",
-            file_path=str(path), operation="detect_format",
+            file_path=str(path),
+            operation="detect_format",
         ) from exc
 
 
@@ -175,7 +177,9 @@ def _migrate_v2(data: dict) -> dict:
     if any(type(postings) is not dict for postings in indexes.values()):
         raise ValueError("Legacy index postings must be dictionaries")
     for edge in edges:
-        if type(edge) is not dict or any(type(edge.get(key)) is not str for key in ("src", "dst", "rel")):
+        if type(edge) is not dict or any(
+            type(edge.get(key)) is not str for key in ("src", "dst", "rel")
+        ):
             raise ValueError("Legacy edges require string src, dst, and rel fields")
         if edge["src"] not in nodes or edge["dst"] not in nodes:
             raise ValueError("Legacy edge references a missing node")
@@ -185,20 +189,26 @@ def _migrate_v2(data: dict) -> dict:
 
     store = NativeStore()
     node_ids = dict(zip(nodes, store.add_nodes(0, list(nodes.items()))))
-    store.add_edges([
-        (
-            node_ids[edge["src"]], node_ids[edge["dst"]], edge["rel"],
-            {key: value for key, value in edge.items() if key not in ("src", "dst", "rel")},
-        )
-        for edge in edges
-    ])
+    store.add_edges(
+        [
+            (
+                node_ids[edge["src"]],
+                node_ids[edge["dst"]],
+                edge["rel"],
+                {key: value for key, value in edge.items() if key not in ("src", "dst", "rel")},
+            )
+            for edge in edges
+        ]
+    )
     for property_name in indexes:
         store.create_index(0, property_name)
     metadata = dict(metadata)
     if "created_at" in data:
         metadata.setdefault("created_at", data["created_at"])
     return {
-        "format": "fastgraph", "version": 3, "metadata": metadata,
+        "format": "fastgraph",
+        "version": 3,
+        "metadata": metadata,
         "store": json.loads(store.snapshot().decode("utf-8")),
     }
 
@@ -229,27 +239,43 @@ class PersistenceManager:
     detect_format = staticmethod(detect_format)
 
     def __init__(self, config: Optional[dict] = None, *, lock: Any = None):
+        if config is not None and callable(getattr(config, "get_config", None)):
+            config = config.get_config()
         if config is not None and not isinstance(config, dict):
-            if lock is not None or not callable(getattr(config, "acquire", None)) or not callable(getattr(config, "release", None)):
+            if (
+                lock is not None
+                or not callable(getattr(config, "acquire", None))
+                or not callable(getattr(config, "release", None))
+            ):
                 raise TypeError("config must be a dictionary")
             lock, config = config, None
         self.config = dict(config or {})
         self.lock = lock
 
     def save(
-        self, data: dict, path: Path | str, format: str = "msgpack",
-        compress: bool = False, durable: bool = True,
+        self,
+        data: dict,
+        path: Path | str,
+        format: str = "msgpack",
+        compress: bool = False,
+        durable: bool = True,
     ) -> Path:
         """Encode before touching the destination, then atomically replace it."""
         temporary = None
         try:
             path = Path(path)
-            format = _normalize_format(format) if format is not None else _suffix_format(path) or "msgpack"
+            format = (
+                _normalize_format(format)
+                if format is not None
+                else _suffix_format(path) or "msgpack"
+            )
             if type(compress) is not bool or type(durable) is not bool:
                 raise TypeError("compress and durable must be booleans")
             _validate_envelope(data)
             if format == "json":
-                payload = json.dumps(data, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+                payload = json.dumps(
+                    data, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+                ).encode("utf-8")
             else:
                 payload = msgpack.packb(data, use_bin_type=True)
             if compress:
@@ -260,15 +286,28 @@ class PersistenceManager:
             temporary = Path(name)
             try:
                 stream = os.fdopen(fd, "wb")
-            except Exception:
+            except BaseException:
                 os.close(fd)
                 raise
             with stream:
-                stream.write(payload)
+                if stream.write(payload) != len(payload):
+                    raise OSError("Incomplete snapshot write")
                 stream.flush()
                 if durable:
                     os.fsync(stream.fileno())
-            os.replace(temporary, path)
+            for attempt in range(10):
+                try:
+                    os.replace(temporary, path)
+                    break
+                except PermissionError as exc:
+                    # Windows replacement briefly locks the target against other publishers.
+                    if (
+                        os.name != "nt"
+                        or getattr(exc, "winerror", None) not in (5, 32, 33)
+                        or attempt == 9
+                    ):
+                        raise
+                    time.sleep(min(0.005 * 2**attempt, 0.05))
             temporary = None
             if durable:
                 _fsync_directory(path.parent)
@@ -276,7 +315,9 @@ class PersistenceManager:
         except Exception as exc:
             raise PersistenceError(
                 f"Failed to save graph to {path}: {exc}",
-                file_path=str(path), operation="save", format=format,
+                file_path=str(path),
+                operation="save",
+                format=format,
             ) from exc
         finally:
             if temporary is not None:
@@ -286,7 +327,9 @@ class PersistenceManager:
                     pass
 
     def load(
-        self, path: Path | str, format: Optional[str] = None,
+        self,
+        path: Path | str,
+        format: Optional[str] = None,
         max_bytes: int = DEFAULT_MAX_BYTES,
     ) -> dict:
         """Read one bounded, optionally gzipped snapshot without executable codecs."""
@@ -300,35 +343,56 @@ class PersistenceManager:
                 format = _payload_format(path, payload)
             if format == "json":
                 data = json.loads(
-                    payload.decode("utf-8-sig"), object_pairs_hook=_unique_object,
+                    payload.decode("utf-8-sig"),
+                    object_pairs_hook=_unique_object,
                     parse_constant=_reject_constant,
                 )
             else:
                 data = msgpack.unpackb(
-                    payload, raw=False, strict_map_key=True,
-                    object_pairs_hook=_unique_object, ext_hook=_reject_extension,
-                    max_str_len=max_bytes, max_bin_len=max_bytes,
-                    max_array_len=max_bytes, max_map_len=max_bytes, max_ext_len=max_bytes,
+                    payload,
+                    raw=False,
+                    strict_map_key=True,
+                    object_pairs_hook=_unique_object,
+                    ext_hook=_reject_extension,
+                    max_str_len=max_bytes,
+                    max_bin_len=max_bytes,
+                    max_array_len=max_bytes,
+                    max_map_len=max_bytes,
+                    max_ext_len=max_bytes,
                 )
-            if type(data) is dict and "nodes" in data and "store" not in data and "format" not in data:
+            if (
+                type(data) is dict
+                and "nodes" in data
+                and "store" not in data
+                and "format" not in data
+            ):
                 data = _migrate_v2(data)
             _validate_envelope(data)
             return data
         except Exception as exc:
             raise PersistenceError(
                 f"Failed to load graph from {path}: {exc}",
-                file_path=str(path), operation="load", format=format,
+                file_path=str(path),
+                operation="load",
+                format=format,
             ) from exc
 
     def translate(
-        self, source_path: Path | str, target_path: Path | str,
-        source_format: Optional[str] = None, target_format: Optional[str] = None,
+        self,
+        source_path: Path | str,
+        target_path: Path | str,
+        source_format: Optional[str] = None,
+        target_format: Optional[str] = None,
         **kwargs: Any,
     ) -> Path:
         """Translate the same full envelope, preserving all opaque native store data."""
         max_bytes = kwargs.pop("max_bytes", DEFAULT_MAX_BYTES)
         data = self.load(source_path, format=source_format, max_bytes=max_bytes)
-        format = target_format if target_format is not None else _suffix_format(Path(target_path)) or "msgpack"
+        format = (
+            target_format
+            if target_format is not None
+            else _suffix_format(Path(target_path)) or "msgpack"
+        )
         return self.save(data, target_path, format=format, **kwargs)
 
     def get_supported_formats(self) -> list[str]:

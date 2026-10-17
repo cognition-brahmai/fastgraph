@@ -9,7 +9,6 @@ This module provides CLI tools for common FastGraph operations including:
 """
 
 from .main import main
-from .commands import *
 
 __all__ = [
     "main",

@@ -19,6 +19,7 @@ class Edge:
     rel: str
     attrs: Mapping[str, Any] = field(default_factory=dict)
     _id: int | None = field(default=None, repr=False)
+    _identity: tuple | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not self.src or not self.dst or not isinstance(self.rel, str) or not self.rel:
@@ -26,6 +27,18 @@ class Edge:
         if not isinstance(self.attrs, Mapping):
             raise ValidationError("Relationship properties must be a mapping", field="attrs")
         object.__setattr__(self, "attrs", MappingProxyType(deepcopy(dict(self.attrs))))
+
+    @classmethod
+    def _from_native(cls, src, dst, rel, attrs, edge_id, identity):
+        # Native conversion has already allocated detached properties. Do not copy again.
+        edge = object.__new__(cls)
+        object.__setattr__(edge, "src", src)
+        object.__setattr__(edge, "dst", dst)
+        object.__setattr__(edge, "rel", rel)
+        object.__setattr__(edge, "attrs", MappingProxyType(attrs))
+        object.__setattr__(edge, "_id", edge_id)
+        object.__setattr__(edge, "_identity", identity)
+        return edge
 
     @property
     def id(self) -> int | None:
@@ -67,10 +80,14 @@ class Edge:
         return deepcopy(self.attrs.get(key, default))
 
     def __hash__(self) -> int:
-        return hash(self.key())
+        return hash(self._identity if self._identity is not None else self.key())
 
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, Edge) and self.key() == other.key()
+        if not isinstance(other, Edge):
+            return False
+        if self._identity is not None or other._identity is not None:
+            return self._identity is not None and self._identity == other._identity
+        return self.key() == other.key()
 
     def __str__(self) -> str:
         return f"{self.src}-[{self.rel}]->{self.dst}"
