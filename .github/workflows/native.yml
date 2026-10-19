@@ -1,0 +1,127 @@
+name: Native Engine Tests
+
+"on":
+  push:
+    branches: [main, dev, develop]
+  pull_request:
+    branches: [main, dev, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Check Rust targets
+        run: cargo check --all-targets --no-default-features
+      - name: Run Rust library tests without the Python extension feature
+        run: cargo test --lib --no-default-features
+      - name: Lint Rust
+        run: cargo clippy --all-targets --no-default-features -- -D warnings
+
+  python:
+    name: Python ${{ matrix.python-version }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build and install the native package with test dependencies
+        run: python -m pip install ".[dev]"
+      - name: Lint Python
+        run: >-
+          python -m ruff check fastgraph tests
+          --exclude fastgraph/cli/__init__.py --exclude fastgraph/core/__init__.py
+      - name: Test the installed package outside the checkout
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          import shutil
+          import subprocess
+          import sys
+          import tempfile
+
+          smoke = """
+          from importlib import metadata
+          import json
+          from pathlib import Path
+          import sys
+          import fastgraph
+          from fastgraph import FastGraph, _native
+          from fastgraph.cli.main import main
+          from click.testing import CliRunner
+
+          source = Path(sys.argv[1]).resolve()
+          distribution = metadata.distribution("fastgx")
+          if distribution.version != fastgraph.__version__:
+              raise SystemExit("Installed metadata and runtime versions differ")
+          packaged = {Path(distribution.locate_file(file)).resolve()
+                      for file in distribution.files or ()}
+          for filename in (fastgraph.__file__, _native.__file__):
+              path = Path(filename).resolve()
+              if path.is_relative_to(source) or path not in packaged:
+                  raise SystemExit(f"Import is not from the installed wheel: {path}")
+              print(f"Installed import: {path}")
+          if not any(entry.group == "console_scripts" and entry.name == "fastgraph"
+                     and entry.value == "fastgraph.cli.main:main"
+                     for entry in distribution.entry_points):
+              raise SystemExit("Missing fastgraph console entry point")
+          graph = FastGraph("ci-smoke")
+          graph.add_nodes_batch([("one", {"value": 1}), ("two", {"value": 2})])
+          graph.add_edges_batch([("one", "two", "next", {})])
+          loaded = FastGraph.from_file(graph.save("smoke.json"))
+          if loaded.get_node("two")["value"] != 2 or not loaded.has_edge("one", "two", "next"):
+              raise SystemExit("Installed native graph/persistence smoke failed")
+          result = CliRunner().invoke(main, ["--format", "json", "version"])
+          if result.exit_code != 0 or json.loads(result.output)["version"] != distribution.version:
+              raise SystemExit(f"Installed CLI smoke failed: {result.output}")
+          graph.close()
+          loaded.close()
+          print(f"Package checks passed: fastgx {distribution.version}")
+          """
+          source = Path.cwd()
+          env = os.environ.copy()
+          env.pop("PYTHONPATH", None)
+          with tempfile.TemporaryDirectory(prefix="fastgraph-ci-") as directory:
+              target = Path(directory)
+              shutil.copytree(source / "tests", target / "tests")
+              shutil.copy2(source / "pyproject.toml", target / "pyproject.toml")
+              shutil.copy2(source / "test_original_code.py", target / "test_original_code.py")
+              env["HOME"] = env["USERPROFILE"] = str(target)
+              env["FASTGRAPH_DATA_DIR"] = str(target / "data")
+              subprocess.run(
+                  [sys.executable, "-I", "-c", smoke, str(source)],
+                  cwd=target, env=env, check=True,
+              )
+              subprocess.run(
+                  [sys.executable, "-I", "-m", "pytest", "tests/", "-v",
+                   "--strict-markers", "--import-mode=importlib", "-p", "no:cacheprovider"],
+                  cwd=target, env=env, check=True,
+              )

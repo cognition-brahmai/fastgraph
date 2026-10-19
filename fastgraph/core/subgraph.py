@@ -1,340 +1,279 @@
-"""
-Subgraph view implementation for FastGraph
+"""Fixed-membership selection handles into a live native graph store."""
 
-This module contains the SubgraphView class which provides memory-efficient
-views into parent graphs without data duplication.
-"""
+from __future__ import annotations
 
 import weakref
-from typing import Any, Dict, List, Set
+from collections.abc import Mapping
+from contextlib import contextmanager
 
-from ..types import NodeId, NodeAttrs
-from ..exceptions import TraversalError
-from .edge import Edge
+from ..exceptions import NodeNotFoundError, TraversalError
+from .traversal import TraversalOperations
+
+
+class _NodeMapping(Mapping):
+    __slots__ = ("_view",)
+
+    def __init__(self, view):
+        self._view = view
+
+    def __len__(self):
+        return self._view.node_count
+
+    def __iter__(self):
+        return iter(self._view._keys())
+
+    def __getitem__(self, key):
+        try:
+            return self._view.get_node(key)
+        except NodeNotFoundError as exc:
+            raise KeyError(key) from exc
 
 
 class SubgraphView:
+    """A fixed ID selection, not a graph clone or a repeatedly evaluated filter.
+
+    Membership excludes removed IDs. Attributes and edges are copied native
+    snapshots when requested; the selection itself owns no graph payloads.
     """
-    Memory-efficient view into a parent graph (no data duplication).
-    
-    A subgraph view provides a filtered view of a parent graph, containing
-    only a subset of nodes and their connected edges. This is implemented
-    using weak references to avoid data duplication and memory overhead.
-    """
-    
-    def __init__(self, parent: 'FastGraph', node_ids: Set[NodeId]):
-        """
-        Initialize subgraph view.
-        
-        Args:
-            parent: Parent FastGraph instance
-            node_ids: Set of node IDs to include in this view
-            
-        Raises:
-            TraversalError: If parent graph is invalid
-        """
-        # Store weak reference to parent to avoid circular references
-        self._parent_ref = weakref.ref(parent)
-        self._node_ids = set(node_ids)  # Make a copy
-        
-        # Validate that parent has reference to this view for cleanup
-        if not hasattr(parent, '_subgraph_views'):
-            raise TraversalError("Parent graph must support subgraph views")
-    
-    @property
-    def parent(self) -> 'FastGraph':
-        """
-        Get the parent graph instance.
-        
-        Returns:
-            Parent FastGraph instance
-            
-        Raises:
-            TraversalError: If parent graph has been garbage collected
-        """
+
+    def __init__(self, parent, node_ids):
+        with parent._state.lock:
+            parent._guard()
+            selected = set()
+            for value in node_ids:
+                if isinstance(value, int) and not isinstance(value, bool):
+                    if not parent._state.store.has_node(value):
+                        raise NodeNotFoundError(value)
+                    selected.add(value)
+                else:
+                    selected.add(parent._resolve_id(value))
+            self._node_ids = frozenset(selected)
+            self._parent_ref = weakref.ref(parent)
+            self._epoch = parent._state.epoch
+
+    @contextmanager
+    def _locked_parent(self):
         parent = self._parent_ref()
         if parent is None:
             raise TraversalError("Parent graph was garbage collected")
-        return parent
-    
+        with parent._state.lock:
+            parent._guard()
+            if parent._state.epoch != self._epoch:
+                raise TraversalError("Subgraph view belongs to an invalidated graph")
+            yield parent
+
     @property
-    def nodes(self) -> Dict[NodeId, NodeAttrs]:
-        """
-        Get nodes in this subgraph view.
-        
-        Returns:
-            Dictionary of node_id -> attributes for nodes in this view
-            (returns a view, not a copy)
-        """
-        parent = self.parent
-        return {
-            nid: parent.graph["nodes"][nid] 
-            for nid in self._node_ids 
-            if nid in parent.graph["nodes"]
-        }
-    
+    def parent(self):
+        with self._locked_parent() as parent:
+            return parent
+
+    def _live_ids(self, parent):
+        return [nid for nid in sorted(self._node_ids) if parent._state.store.has_node(nid)]
+
+    def _resolve(self, parent, value):
+        nid = parent._resolve_id(value)
+        if nid not in self._node_ids:
+            raise NodeNotFoundError(value)
+        return nid
+
+    def _keys(self):
+        with self._locked_parent() as parent:
+            return tuple(parent._display_id(nid) for nid in self._live_ids(parent))
+
+    def _edge_ids(self, parent):
+        return (
+            edge_id
+            for nid in self._live_ids(parent)
+            for neighbor, edge_id in parent._state.store.neighbors(nid, direction="out")
+            if neighbor in self._node_ids
+        )
+
     @property
-    def edges(self) -> List[Edge]:
-        """
-        Get edges in this subgraph view.
-        
-        Returns:
-            List of edges where both endpoints are in this subgraph
-        """
-        parent = self.parent
-        return [
-            edge for edge in parent._edges.values() 
-            if edge.src in self._node_ids and edge.dst in self._node_ids
-        ]
-    
+    def nodes(self) -> Mapping:
+        with self._locked_parent():
+            return _NodeMapping(self)
+
+    @property
+    def edges(self):
+        with self._locked_parent() as parent:
+            return [parent._edge_ref(eid) for eid in self._edge_ids(parent)]
+
     @property
     def node_count(self) -> int:
-        """
-        Get the number of nodes in this subgraph.
-        
-        Returns:
-            Number of nodes
-        """
-        return len(self._node_ids)
-    
+        with self._locked_parent() as parent:
+            return sum(parent._state.store.has_node(nid) for nid in self._node_ids)
+
     @property
     def edge_count(self) -> int:
-        """
-        Get the number of edges in this subgraph.
-        
-        Returns:
-            Number of edges
-        """
-        return len(self.edges)
-    
-    def contains_node(self, node_id: NodeId) -> bool:
-        """
-        Check if a node is in this subgraph view.
-        
-        Args:
-            node_id: Node ID to check
-            
-        Returns:
-            True if node is in view, False otherwise
-        """
-        return node_id in self._node_ids
-    
-    def get_node(self, node_id: NodeId) -> NodeAttrs:
-        """
-        Get a node from this subgraph view.
-        
-        Args:
-            node_id: Node ID to retrieve
-            
-        Returns:
-            Node attributes
-            
-        Raises:
-            TraversalError: If node is not in this view
-        """
-        if node_id not in self._node_ids:
-            raise TraversalError(f"Node '{node_id}' not in subgraph view", 
-                              node_id=node_id, operation="get_node")
-        
-        parent = self.parent
-        if node_id not in parent.graph["nodes"]:
-            raise TraversalError(f"Node '{node_id}' not found in parent graph", 
-                              node_id=node_id, operation="get_node")
-        
-        return parent.graph["nodes"][node_id]
-    
-    def get_edges_between(self, src: NodeId, dst: NodeId, rel: str = None) -> List[Edge]:
-        """
-        Get edges between two nodes in this subgraph.
-        
-        Args:
-            src: Source node ID
-            dst: Destination node ID
-            rel: Optional relation filter
-            
-        Returns:
-            List of edges between the nodes
-        """
-        parent = self.parent
-        edges = []
-        
-        for (edge_src, edge_dst, edge_rel), edge in parent._edges.items():
-            if (edge_src == src and edge_dst == dst and 
-                edge_src in self._node_ids and edge_dst in self._node_ids):
-                if rel is None or edge_rel == rel:
-                    edges.append(edge)
-        
-        return edges
-    
-    def get_node_edges(self, node_id: NodeId) -> List[Edge]:
-        """
-        Get all edges connected to a node in this subgraph.
-        
-        Args:
-            node_id: Node ID
-            
-        Returns:
-            List of edges connected to the node
-        """
-        if node_id not in self._node_ids:
-            return []
-        
-        parent = self.parent
-        edges = []
-        
-        # Outgoing edges
-        for edge in parent._out_edges.get(node_id, []):
-            if edge.dst in self._node_ids:
-                edges.append(edge)
-        
-        # Incoming edges
-        for edge in parent._in_edges.get(node_id, []):
-            if edge.src in self._node_ids:
-                edges.append(edge)
-        
-        return edges
-    
-    def get_neighbors(self, node_id: NodeId) -> List[NodeId]:
-        """
-        Get neighbors of a node within this subgraph.
-        
-        Args:
-            node_id: Node ID
-            
-        Returns:
-            List of neighbor node IDs
-        """
-        if node_id not in self._node_ids:
-            return []
-        
-        parent = self.parent
-        neighbors = set()
-        
-        # Outgoing neighbors
-        for edge in parent._out_edges.get(node_id, []):
-            if edge.dst in self._node_ids:
-                neighbors.add(edge.dst)
-        
-        # Incoming neighbors
-        for edge in parent._in_edges.get(node_id, []):
-            if edge.src in self._node_ids:
-                neighbors.add(edge.src)
-        
-        return list(neighbors)
-    
-    def stats(self) -> Dict[str, Any]:
-        """
-        Get statistics for this subgraph view.
-        
-        Returns:
-            Dictionary containing subgraph statistics
-        """
-        return {
-            "nodes": self.node_count,
-            "edges": self.edge_count,
-            "avg_degree": (2 * self.edge_count / self.node_count) if self.node_count > 0 else 0,
-            "density": self._calculate_density(),
-        }
-    
-    def _calculate_density(self) -> float:
-        """
-        Calculate graph density.
-        
-        Returns:
-            Graph density (0.0 to 1.0)
-        """
-        if self.node_count <= 1:
-            return 0.0
-        
-        # For directed graph: edges / (n * (n-1))
-        max_possible_edges = self.node_count * (self.node_count - 1)
-        return self.edge_count / max_possible_edges
-    
+        with self._locked_parent() as parent:
+            return sum(1 for _ in self._edge_ids(parent))
+
+    def contains_node(self, node) -> bool:
+        with self._locked_parent() as parent:
+            try:
+                nid = parent._resolve_id(node)
+            except NodeNotFoundError:
+                return False
+            return nid in self._node_ids
+
+    def get_node(self, node):
+        with self._locked_parent() as parent:
+            return parent._node_ref(self._resolve(parent, node)).attrs
+
+    def neighbors_out(self, node, rel=None, edge_filter=None):
+        with self._locked_parent() as parent:
+            return TraversalOperations(parent, allowed=self._node_ids).neighbors_out(
+                node, rel, edge_filter
+            )
+
+    def neighbors_in(self, node, rel=None, edge_filter=None):
+        with self._locked_parent() as parent:
+            return TraversalOperations(parent, allowed=self._node_ids).neighbors_in(
+                node, rel, edge_filter
+            )
+
+    def neighbors(self, node, rel=None, edge_filter=None):
+        with self._locked_parent() as parent:
+            return TraversalOperations(parent, allowed=self._node_ids).neighbors(
+                node, rel, edge_filter
+            )
+
+    def degree(self, node, rel=None):
+        with self._locked_parent() as parent:
+            return TraversalOperations(parent, allowed=self._node_ids).degree(node, rel)
+
+    def get_edges_between(self, src, dst, rel=None):
+        with self._locked_parent() as parent:
+            try:
+                src_id, dst_id = self._resolve(parent, src), self._resolve(parent, dst)
+            except NodeNotFoundError:
+                return []
+            return [
+                parent._edge_ref(eid)
+                for neighbor, eid in parent._state.store.neighbors(src_id, direction="out", rel=rel)
+                if neighbor == dst_id
+            ]
+
+    def get_node_edges(self, node):
+        with self._locked_parent() as parent:
+            try:
+                nid = self._resolve(parent, node)
+            except NodeNotFoundError:
+                return []
+            edge_ids = dict.fromkeys(
+                eid
+                for neighbor, eid in parent._state.store.neighbors(nid, direction="both")
+                if neighbor in self._node_ids
+            )
+            return [parent._edge_ref(eid) for eid in edge_ids]
+
+    def get_neighbors(self, node):
+        with self._locked_parent() as parent:
+            try:
+                nid = self._resolve(parent, node)
+            except NodeNotFoundError:
+                return []
+            ids = dict.fromkeys(
+                neighbor
+                for neighbor, _ in parent._state.store.neighbors(nid, direction="both")
+                if neighbor in self._node_ids
+            )
+            return [parent._display_id(nid) for nid in ids]
+
+    def stats(self):
+        with self._locked_parent() as parent:
+            nodes = sum(parent._state.store.has_node(nid) for nid in self._node_ids)
+            edges = sum(1 for _ in self._edge_ids(parent))
+            return {
+                "nodes": nodes,
+                "edges": edges,
+                "avg_degree": 2 * edges / nodes if nodes else 0.0,
+                "density": edges / (nodes * (nodes - 1)) if nodes > 1 else 0.0,
+            }
+
+    def _calculate_density(self):
+        return self.stats()["density"]
+
+    def bfs(
+        self,
+        start,
+        max_depth=None,
+        rel=None,
+        node_filter=None,
+        edge_filter=None,
+        *,
+        direction="out",
+        nested=False,
+        max_nodes=None,
+        filters=None,
+    ):
+        with self._locked_parent() as parent:
+            return TraversalOperations(parent, allowed=self._node_ids).bfs(
+                start,
+                max_depth,
+                rel,
+                node_filter,
+                edge_filter,
+                direction=direction,
+                nested=nested,
+                max_nodes=max_nodes,
+                filters=filters,
+            )
+
+    def shortest_path(
+        self,
+        start,
+        end,
+        rel=None,
+        edge_filter=None,
+        *,
+        direction="out",
+        nested=False,
+        max_depth=None,
+        node_filter=None,
+        filters=None,
+    ):
+        with self._locked_parent() as parent:
+            return TraversalOperations(parent, allowed=self._node_ids).shortest_path(
+                start,
+                end,
+                rel,
+                edge_filter,
+                direction=direction,
+                nested=nested,
+                max_depth=max_depth,
+                node_filter=node_filter,
+                filters=filters,
+            )
+
     def is_connected(self) -> bool:
-        """
-        Check if this subgraph is connected.
-        
-        Returns:
-            True if subgraph is connected, False otherwise
-        """
-        if self.node_count == 0:
-            return True
-        
-        if self.node_count == 1:
-            return True
-        
-        # Use BFS to check connectivity
-        visited = set()
-        to_visit = [next(iter(self._node_ids))]  # Start with any node
-        
-        while to_visit:
-            current = to_visit.pop(0)
-            if current in visited:
-                continue
-            
-            visited.add(current)
-            
-            # Add unvisited neighbors
-            neighbors = self.get_neighbors(current)
-            for neighbor in neighbors:
-                if neighbor not in visited and neighbor not in to_visit:
-                    to_visit.append(neighbor)
-        
-        return len(visited) == self.node_count
-    
-    def find_components(self) -> List[Set[NodeId]]:
-        """
-        Find connected components in this subgraph.
-        
-        Returns:
-            List of sets, each containing node IDs for a component
-        """
-        if self.node_count == 0:
-            return []
-        
-        unvisited = set(self._node_ids)
-        components = []
-        
-        while unvisited:
-            # Start BFS from an unvisited node
-            start = next(iter(unvisited))
-            component = set()
-            to_visit = [start]
-            
-            while to_visit:
-                current = to_visit.pop(0)
-                if current in component:
-                    continue
-                
-                component.add(current)
-                
-                # Add unvisited neighbors within this subgraph
-                neighbors = self.get_neighbors(current)
-                for neighbor in neighbors:
-                    if neighbor not in component and neighbor in unvisited:
-                        to_visit.append(neighbor)
-            
-            components.append(component)
-            unvisited -= component
-        
-        return components
-    
-    def __contains__(self, node_id: NodeId) -> bool:
-        """Check if node is in subgraph using 'in' operator."""
-        return self.contains_node(node_id)
-    
-    def __len__(self) -> int:
-        """Get number of nodes in subgraph."""
+        with self._locked_parent() as parent:
+            ids = self._live_ids(parent)
+            if len(ids) <= 1:
+                return True
+            visited, _, _, _ = parent._state.store.bfs(ids[0], direction="both", allowed=ids)
+            return len(visited) == len(ids)
+
+    def find_components(self):
+        with self._locked_parent() as parent:
+            components = TraversalOperations(parent, allowed=self._node_ids).connected_components()
+            return [
+                {parent._display_id(node._id) for node in component} for component in components
+            ]
+
+    def __contains__(self, node):
+        return self.contains_node(node)
+
+    def __len__(self):
         return self.node_count
-    
+
     def __iter__(self):
-        """Iterate over node IDs in subgraph."""
-        return iter(self._node_ids)
-    
-    def __repr__(self) -> str:
-        """String representation."""
-        return f"SubgraphView(nodes={self.node_count}, edges={self.edge_count})"
-    
-    def __str__(self) -> str:
-        """String representation."""
-        return f"Subgraph with {self.node_count} nodes and {self.edge_count} edges"
+        return iter(self._keys())
+
+    def __repr__(self):
+        stats = self.stats()
+        return f"SubgraphView(nodes={stats['nodes']}, edges={stats['edges']})"
+
+    def __str__(self):
+        stats = self.stats()
+        return f"Subgraph with {stats['nodes']} nodes and {stats['edges']} edges"

@@ -1,797 +1,399 @@
-"""
-Persistence operations for FastGraph
+"""Versioned JSON/MessagePack snapshots with bounded reads and atomic publication."""
 
-This module handles saving and loading graph data in various formats
-with support for compression and streaming operations, enhanced with
-automatic path resolution and format detection.
-"""
+from __future__ import annotations
 
-import pickle
+import errno
+import gzip
+import io
 import json
-import msgpack
-import logging
-from typing import Any, Dict, List, Optional, Union, Tuple
-from pathlib import Path
+import math
+import os
+import tempfile
 import time
-import threading
-from contextlib import contextmanager
+from pathlib import Path
+from typing import Any, BinaryIO, Optional
 
-from ..types import FormatType, PersistenceFormat, IndexValue
+import msgpack
+
 from ..exceptions import PersistenceError
-from .edge import Edge
 
 
-logger = logging.getLogger(__name__)
+DEFAULT_MAX_BYTES = 256 * 1024 * 1024
+_FORMATS = frozenset({"json", "msgpack"})
+_ENVELOPE_KEYS = frozenset({"format", "version", "metadata", "store"})
+_SUFFIX_FORMATS = {".json": "json", ".msgpack": "msgpack", ".mpk": "msgpack"}
+
+
+def _normalize_format(format: str) -> str:
+    if not isinstance(format, str) or format.lower() not in _FORMATS:
+        raise ValueError("Unsupported snapshot format; use 'json' or 'msgpack' (never pickle)")
+    return format.lower()
+
+
+def _suffix_format(path: Path) -> Optional[str]:
+    suffixes = path.suffixes
+    if suffixes and suffixes[-1].lower() == ".gz":
+        suffixes = suffixes[:-1]
+    return _SUFFIX_FORMATS.get(suffixes[-1].lower()) if suffixes else None
+
+
+def _validate_limit(max_bytes: int) -> None:
+    if type(max_bytes) is not int or max_bytes <= 0:
+        raise ValueError("max_bytes must be a positive integer")
+
+
+def _read_bounded(stream: BinaryIO, max_bytes: int, description: str) -> bytes:
+    data = bytearray()
+    while True:
+        chunk = stream.read(min(64 * 1024, max_bytes - len(data) + 1))
+        if not chunk:
+            return bytes(data)
+        if len(data) + len(chunk) > max_bytes:
+            raise ValueError(f"Snapshot {description} exceeds max_bytes={max_bytes}")
+        data.extend(chunk)
+
+
+def _read_payload(path: Path, max_bytes: int) -> bytes:
+    with path.open("rb") as stream:
+        payload = _read_bounded(stream, max_bytes, "input")
+    if payload.startswith(b"\x1f\x8b"):
+        with gzip.GzipFile(fileobj=io.BytesIO(payload), mode="rb") as stream:
+            return _read_bounded(stream, max_bytes, "decoded size")
+    return payload
+
+
+def _payload_format(path: Path, payload: bytes) -> str:
+    prefix = payload
+    if prefix.startswith(b"\xef\xbb\xbf"):
+        prefix = prefix[3:]
+    prefix = prefix.lstrip(b" \t\r\n")
+    if prefix.startswith((b"{", b"[")):
+        return "json"
+    if payload and (0x80 <= payload[0] <= 0x8F or payload[0] in (0xDE, 0xDF)):
+        return "msgpack"
+    format = _suffix_format(path)
+    if format is None:
+        raise ValueError("Cannot detect JSON/MessagePack snapshot format; pickle is unsupported")
+    return format
+
+
+def detect_format(path: Path | str, max_bytes: int = DEFAULT_MAX_BYTES) -> Optional[str]:
+    """Use a supported suffix, otherwise inspect this file only if it exists."""
+    try:
+        path = Path(path)
+        _validate_limit(max_bytes)
+        format = _suffix_format(path)
+        if format is not None:
+            return format
+        if path.is_file():
+            return _payload_format(path, _read_payload(path, max_bytes))
+        return None
+    except Exception as exc:
+        raise PersistenceError(
+            f"Failed to detect snapshot format: {exc}",
+            file_path=str(path),
+            operation="detect_format",
+        ) from exc
+
+
+def _unique_object(pairs: list[tuple[Any, Any]]) -> dict:
+    result = {}
+    for key, value in pairs:
+        if not isinstance(key, str):
+            raise ValueError("Snapshot object keys must be strings")
+        if key in result:
+            raise ValueError(f"Duplicate snapshot object key: {key!r}")
+        result[key] = value
+    return result
+
+
+def _reject_constant(value: str) -> None:
+    raise ValueError(f"Non-finite JSON number is unsupported: {value}")
+
+
+def _reject_extension(code: int, data: bytes) -> None:
+    raise ValueError(f"MessagePack extension values are unsupported (code {code})")
+
+
+def _validate_json_value(value: Any, active: Optional[set[int]] = None) -> None:
+    kind = type(value)
+    if value is None or kind in (str, bool, int):
+        return
+    if kind is float:
+        if not math.isfinite(value):
+            raise ValueError("Snapshots require finite JSON numbers")
+        return
+    if kind not in (dict, list):
+        raise TypeError(f"Snapshots support JSON values only, not {kind.__name__}")
+    if active is None:
+        active = set()
+    identity = id(value)
+    if identity in active:
+        raise ValueError("Circular snapshot values are unsupported")
+    active.add(identity)
+    try:
+        if kind is dict:
+            for key, item in value.items():
+                if type(key) is not str:
+                    raise TypeError("Snapshot object keys must be strings")
+                _validate_json_value(item, active)
+        else:
+            for item in value:
+                _validate_json_value(item, active)
+    finally:
+        active.remove(identity)
+
+
+def _validate_envelope(data: Any) -> None:
+    if type(data) is not dict or set(data) != _ENVELOPE_KEYS:
+        raise ValueError("Expected a FastGraph envelope with format, version, metadata, and store")
+    if data["format"] != "fastgraph":
+        raise ValueError("Snapshot envelope format must be 'fastgraph'")
+    if type(data["version"]) is not int or data["version"] != 3:
+        raise ValueError(f"Unsupported FastGraph snapshot version: {data['version']!r}")
+    if type(data["metadata"]) is not dict or type(data["store"]) is not dict:
+        raise ValueError("Snapshot metadata and store must be dictionaries")
+    _validate_json_value(data)
+
+
+def _migrate_v2(data: dict) -> dict:
+    """Rebuild legacy flat data, not its potentially stale or lossy index postings."""
+    _validate_json_value(data)
+    version = data.get("version")
+    if not (type(version) is int and version == 2 or version == "2.0.0"):
+        raise ValueError(f"Unsupported legacy FastGraph snapshot version: {version!r}")
+    if set(data) - {"version", "created_at", "nodes", "edges", "metadata", "indexes"}:
+        raise ValueError("Unsupported fields in legacy snapshot")
+    nodes = data.get("nodes")
+    edges = data.get("edges", [])
+    metadata = data.get("metadata", {})
+    indexes = data.get("indexes", {})
+    if type(nodes) is not dict or type(edges) is not list:
+        raise ValueError("Legacy nodes must be a dictionary and edges must be a list")
+    if type(metadata) is not dict or type(indexes) is not dict:
+        raise ValueError("Legacy metadata and indexes must be dictionaries")
+    if any(type(properties) is not dict for properties in nodes.values()):
+        raise ValueError("Legacy node properties must be dictionaries")
+    if any(type(postings) is not dict for postings in indexes.values()):
+        raise ValueError("Legacy index postings must be dictionaries")
+    for edge in edges:
+        if type(edge) is not dict or any(
+            type(edge.get(key)) is not str for key in ("src", "dst", "rel")
+        ):
+            raise ValueError("Legacy edges require string src, dst, and rel fields")
+        if edge["src"] not in nodes or edge["dst"] not in nodes:
+            raise ValueError("Legacy edge references a missing node")
+
+    # The local extension import avoids importing the graph facade during migration.
+    from .._native import NativeStore
+
+    store = NativeStore()
+    node_ids = dict(zip(nodes, store.add_nodes(0, list(nodes.items()))))
+    store.add_edges(
+        [
+            (
+                node_ids[edge["src"]],
+                node_ids[edge["dst"]],
+                edge["rel"],
+                {key: value for key, value in edge.items() if key not in ("src", "dst", "rel")},
+            )
+            for edge in edges
+        ]
+    )
+    for property_name in indexes:
+        store.create_index(0, property_name)
+    metadata = dict(metadata)
+    if "created_at" in data:
+        metadata.setdefault("created_at", data["created_at"])
+    return {
+        "format": "fastgraph",
+        "version": 3,
+        "metadata": metadata,
+        "store": json.loads(store.snapshot().decode("utf-8")),
+    }
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name != "posix":
+        return
+    unsupported = {errno.EINVAL, errno.ENOTSUP}
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    except OSError as exc:
+        if exc.errno not in unsupported:
+            raise
+        return
+    try:
+        try:
+            os.fsync(fd)
+        except OSError as exc:
+            if exc.errno not in unsupported:
+                raise
+    finally:
+        os.close(fd)
 
 
 class PersistenceManager:
-    """
-    Handles graph persistence operations with multiple format support.
-    
-    Supports saving and loading graphs in various formats with compression,
-    streaming for large graphs, thread safety, and enhanced features like
-    automatic path resolution and format detection.
-    """
-    
-    def __init__(self, lock, config: Optional[Dict[str, Any]] = None):
-        """
-        Initialize persistence manager.
-        
-        Args:
-            lock: Threading lock for thread-safe operations
-            config: Configuration dictionary for enhanced features
-        """
+    """Persist complete envelopes; callers own synchronization of graph state."""
+
+    detect_format = staticmethod(detect_format)
+
+    def __init__(self, config: Optional[dict] = None, *, lock: Any = None):
+        if config is not None and callable(getattr(config, "get_config", None)):
+            config = config.get_config()
+        if config is not None and not isinstance(config, dict):
+            if (
+                lock is not None
+                or not callable(getattr(config, "acquire", None))
+                or not callable(getattr(config, "release", None))
+            ):
+                raise TypeError("config must be a dictionary")
+            lock, config = config, None
+        self.config = dict(config or {})
         self.lock = lock
-        self.config = config or {}
-        self._supported_formats = {"msgpack", "pickle", "json"}
-        
-        # Enhanced features
-        enhanced_api = self.config.get("enhanced_api", {})
-        if isinstance(enhanced_api, dict):
-            self._enhanced_enabled = enhanced_api.get("path_resolution", True)
-        else:
-            self._enhanced_enabled = bool(enhanced_api)
-        
-        if self._enhanced_enabled:
-            from ..utils.path_resolver import PathResolver
-            from ..utils.resource_manager import ResourceManager
-            
-            self._path_resolver = PathResolver(self.config)
-            self._resource_manager = ResourceManager(self.config)
-        else:
-            self._path_resolver = None
-            self._resource_manager = None
-    
-    def save(self, graph_data: Dict[str, Any], path: FormatType,
-             format: str = "msgpack", compress: Optional[bool] = None) -> None:
-        """
-        Save graph data to file.
-        
-        Args:
-            graph_data: Graph data dictionary
-            path: File path to save to
-            format: File format ("msgpack", "pickle", "json")
-            compress: Whether to use compression. If None, defaults to True for
-                     msgpack/pickle formats, False for JSON format (to keep it human-readable)
-            
-        Raises:
-            PersistenceError: If save fails
-            ValidationError: If parameters are invalid
-        """
-        path = Path(path)
-        format = format.lower()
-        
-        # Determine default compression based on format
-        if compress is None:
-            compress = format != "json"  # JSON is human-readable, don't compress by default
-        
-        if format not in self._supported_formats:
-            raise PersistenceError(f"Unsupported format: {format}. Supported formats: {self._supported_formats}",
-                                operation="save", format=format)
-        
+
+    def save(
+        self,
+        data: dict,
+        path: Path | str,
+        format: str = "msgpack",
+        compress: bool = False,
+        durable: bool = True,
+    ) -> Path:
+        """Encode before touching the destination, then atomically replace it."""
+        temporary = None
         try:
-            # Prepare data for saving
-            save_data = self._prepare_save_data(graph_data)
-            
-            # Ensure directory exists
+            path = Path(path)
+            format = (
+                _normalize_format(format)
+                if format is not None
+                else _suffix_format(path) or "msgpack"
+            )
+            if type(compress) is not bool or type(durable) is not bool:
+                raise TypeError("compress and durable must be booleans")
+            _validate_envelope(data)
+            if format == "json":
+                payload = json.dumps(
+                    data, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+                ).encode("utf-8")
+            else:
+                payload = msgpack.packb(data, use_bin_type=True)
+            if compress:
+                payload = gzip.compress(payload, mtime=0)
+
             path.parent.mkdir(parents=True, exist_ok=True)
-            
-            with self.lock:
-                start_time = time.time()
-                
-                if format == "msgpack":
-                    self._save_msgpack(save_data, path, compress)
-                elif format == "pickle":
-                    self._save_pickle(save_data, path, compress)
-                elif format == "json":
-                    self._save_json(save_data, path, compress)
-                else:
-                    raise PersistenceError(f"Unsupported format: {format}",
-                                        operation="save", format=format)
-                
-                save_time = time.time() - start_time
-                file_size = path.stat().st_size
-                
-                # Log statistics (in real implementation, would use proper logging)
-                print(f"Saved graph in {save_time:.3f}s, size: {file_size:,} bytes")
-                
-        except Exception as e:
-            raise PersistenceError(f"Failed to save graph to {path}: {e}",
-                                operation="save", file_path=str(path), format=format)
-    
-    def load(self, path: FormatType, format: str = "msgpack") -> Dict[str, Any]:
-        """
-        Load graph data from file.
-        
-        Args:
-            path: File path to load from
-            format: File format ("msgpack", "pickle", "json")
-            
-        Returns:
-            Loaded graph data dictionary
-            
-        Raises:
-            PersistenceError: If load fails
-            ValidationError: If parameters are invalid
-        """
-        path = Path(path)
-        format = format.lower()
-        
-        if not path.exists():
-            raise PersistenceError(f"File not found: {path}",
-                                operation="load", file_path=str(path), format=format)
-        
-        if format not in self._supported_formats:
-            raise PersistenceError(f"Unsupported format: {format}. Supported formats: {self._supported_formats}",
-                                operation="load", format=format)
-        
-        try:
-            with self.lock:
-                start_time = time.time()
-                
-                if format == "msgpack":
-                    data = self._load_msgpack(path)
-                elif format == "pickle":
-                    data = self._load_pickle(path)
-                elif format == "json":
-                    data = self._load_json(path)
-                else:
-                    raise PersistenceError(f"Unsupported format: {format}",
-                                        operation="load", file_path=str(path), format=format)
-                
-                load_time = time.time() - start_time
-                
-                # Validate and process loaded data
-                processed_data = self._process_loaded_data(data)
-                
-                # Log statistics
-                print(f"Loaded graph in {load_time:.3f}s, nodes: {len(processed_data.get('nodes', {}))}, edges: {len(data.get('edges', []))}")
-                
-                return processed_data
-                
-        except Exception as e:
-            raise PersistenceError(f"Failed to load graph from {path}: {e}",
-                                operation="load", file_path=str(path), format=format)
-    
-    def save_stream(self, graph_data: Dict[str, Any], path: FormatType,
-                   format: str = "msgpack", chunk_size: int = 10000) -> None:
-        """
-        Save large graphs in streaming mode.
-        
-        Args:
-            graph_data: Graph data dictionary
-            path: File path to save to
-            format: File format
-            chunk_size: Number of items to process at once
-        """
-        path = Path(path)
-        format = format.lower()
-        
-        if format not in {"msgpack", "json"}:
-            raise PersistenceError(f"Streaming not supported for format: {format}",
-                                operation="save_stream", format=format)
-        
-        try:
-            with self.lock:
-                if format == "msgpack":
-                    self._save_stream_msgpack(graph_data, path, chunk_size)
-                elif format == "json":
-                    self._save_stream_json(graph_data, path, chunk_size)
-                    
-        except Exception as e:
-            raise PersistenceError(f"Failed to save graph stream to {path}: {e}",
-                                operation="save_stream", file_path=str(path), format=format)
-    
-    def load_stream(self, path: FormatType, format: str = "msgpack",
-                   chunk_callback=None) -> Dict[str, Any]:
-        """
-        Load large graphs in streaming mode.
-        
-        Args:
-            path: File path to load from
-            format: File format
-            chunk_callback: Optional callback for each chunk
-            
-        Returns:
-            Loaded graph data
-        """
-        path = Path(path)
-        format = format.lower()
-        
-        try:
-            with self.lock:
-                if format == "msgpack":
-                    return self._load_stream_msgpack(path, chunk_callback)
-                elif format == "json":
-                    return self._load_stream_json(path, chunk_callback)
-                else:
-                    raise PersistenceError(f"Streaming not supported for format: {format}",
-                                        operation="load_stream", format=format)
-                    
-        except Exception as e:
-            raise PersistenceError(f"Failed to load graph stream from {path}: {e}",
-                                operation="load_stream", file_path=str(path), format=format)
-    
-    @contextmanager
-    def atomic_write(self, path: FormatType):
-        """
-        Context manager for atomic file writes.
-        
-        Args:
-            path: File path to write to
-        """
-        path = Path(path)
-        temp_path = path.with_suffix(f"{path.suffix}.tmp")
-        
-        try:
-            yield temp_path
-            # Remove existing file if it exists (Windows compatibility)
-            if path.exists():
-                try:
-                    path.unlink()
-                except PermissionError:
-                    # File might be locked, try to rename with timestamp
-                    import time
-                    backup_path = path.with_suffix(f"{path.suffix}.bak.{int(time.time())}")
-                    path.rename(backup_path)
-            temp_path.rename(path)
-        except Exception:
-            if temp_path.exists():
-                try:
-                    temp_path.unlink()
-                except PermissionError:
-                    pass  # Ignore cleanup errors on Windows
-            raise
-    
-    def _prepare_save_data(self, graph_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Prepare graph data for saving.
-        
-        Args:
-            graph_data: Raw graph data
-            
-        Returns:
-            Formatted data ready for saving
-        """
-        data = {
-            "version": "2.0.0",
-            "created_at": time.time(),
-            "nodes": graph_data.get("nodes", {}),
-            "edges": [edge.to_dict() for edge in graph_data.get("_edges", {}).values()],
-            "metadata": graph_data.get("metadata", {}),
-            "indexes": self._serialize_indexes(graph_data.get("node_indexes", {}))
-        }
-        
-        return data
-    
-    def _process_loaded_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Process and validate loaded data.
-        
-        Args:
-            data: Raw loaded data
-            
-        Returns:
-            Processed data ready for graph reconstruction
-        """
-        # Validate required fields
-        if "nodes" not in data:
-            raise PersistenceError("Invalid graph data: missing nodes field",
-                                operation="load")
-        
-        # Process edges
-        processed_edges = {}
-        for edge_dict in data.get("edges", []):
-            edge = Edge.from_dict(edge_dict)
-            processed_edges[edge.key()] = edge
-        
-        # Process indexes
-        processed_indexes = self._deserialize_indexes(data.get("indexes", {}))
-        
-        return {
-            "nodes": data["nodes"],
-            "edges": processed_edges,
-            "metadata": data.get("metadata", {}),
-            "indexes": processed_indexes
-        }
-    
-    def _save_msgpack(self, data: Dict[str, Any], path: Path, compress: bool) -> None:
-        """Save data using msgpack format."""
-        with open(path, "wb") as f:
-            if compress:
-                import gzip
-                with gzip.GzipFile(fileobj=f, mode='wb') as gz_file:
-                    msgpack.pack(data, gz_file, use_bin_type=True)
-            else:
-                msgpack.pack(data, f, use_bin_type=True)
-    
-    def _load_msgpack(self, path: Path) -> Dict[str, Any]:
-        """Load data using msgpack format."""
-        with open(path, "rb") as f:
-            # Check if file is gzipped
-            f.seek(0)
-            header = f.read(2)
-            f.seek(0)
-            
-            if header == b'\x1f\x8b':  # gzip magic number
-                import gzip
-                with gzip.GzipFile(fileobj=f, mode='rb') as gz_file:
-                    return msgpack.unpack(gz_file, raw=False)
-            else:
-                return msgpack.unpack(f, raw=False)
-    
-    def _save_pickle(self, data: Dict[str, Any], path: Path, compress: bool) -> None:
-        """Save data using pickle format."""
-        with open(path, "wb") as f:
-            if compress:
-                import gzip
-                with gzip.GzipFile(fileobj=f, mode='wb') as gz_file:
-                    pickle.dump(data, gz_file, protocol=pickle.HIGHEST_PROTOCOL)
-            else:
-                pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
-    
-    def _load_pickle(self, path: Path) -> Dict[str, Any]:
-        """Load data using pickle format."""
-        with open(path, "rb") as f:
-            # Check if file is gzipped
-            f.seek(0)
-            header = f.read(2)
-            f.seek(0)
-            
-            if header == b'\x1f\x8b':  # gzip magic number
-                import gzip
-                with gzip.GzipFile(fileobj=f, mode='rb') as gz_file:
-                    return pickle.load(gz_file)
-            else:
-                return pickle.load(f)
-    
-    def _save_json(self, data: Dict[str, Any], path: Path, compress: bool) -> None:
-        """Save data using JSON format."""
-        if compress:
-            import gzip
-            with gzip.open(path, mode='wt', encoding='utf-8') as gz_file:
-                json.dump(data, gz_file, indent=2, default=str)
-        else:
-            with open(path, "w", encoding='utf-8') as f:
-                json.dump(data, f, indent=2, default=str)
-    
-    def _load_json(self, path: Path) -> Dict[str, Any]:
-        """Load data using JSON format."""
-        # Check if file is gzipped
-        with open(path, "rb") as f:
-            f.seek(0)
-            header = f.read(2)
-            f.seek(0)
-            
-            if header == b'\x1f\x8b':  # gzip magic number
-                import gzip
-                with gzip.open(path, mode='rt', encoding='utf-8') as gz_file:
-                    return json.load(gz_file)
-            else:
-                # Use text mode for regular JSON
-                with open(path, "r", encoding='utf-8') as text_file:
-                    return json.load(text_file)
-    
-    def _save_stream_msgpack(self, data: Dict[str, Any], path: Path, chunk_size: int) -> None:
-        """Save large graph using streaming msgpack."""
-        with open(path, "wb") as f:
-            # Write metadata first
-            metadata = {
-                "version": "2.0.0",
-                "created_at": time.time(),
-                "metadata": data.get("metadata", {})
-            }
-            msgpack.pack({"metadata": metadata}, f, use_bin_type=True)
-            
-            # Stream nodes in chunks
-            nodes = data.get("nodes", {})
-            node_items = list(nodes.items())
-            
-            for i in range(0, len(node_items), chunk_size):
-                chunk = dict(node_items[i:i + chunk_size])
-                msgpack.pack({"nodes_chunk": chunk}, f, use_bin_type=True)
-            
-            # Stream edges in chunks
-            edges = [edge.to_dict() for edge in data.get("_edges", {}).values()]
-            for i in range(0, len(edges), chunk_size):
-                chunk = edges[i:i + chunk_size]
-                msgpack.pack({"edges_chunk": chunk}, f, use_bin_type=True)
-    
-    def _load_stream_msgpack(self, path: Path, chunk_callback=None) -> Dict[str, Any]:
-        """Load large graph using streaming msgpack."""
-        nodes = {}
-        edges = []
-        metadata = {}
-        
-        with open(path, "rb") as f:
-            unpacker = msgpack.Unpacker(raw=False)
-            
-            while True:
-                try:
-                    data = unpacker.unpack(f)
-                    
-                    if "metadata" in data:
-                        metadata = data["metadata"]
-                    elif "nodes_chunk" in data:
-                        nodes.update(data["nodes_chunk"])
-                        if chunk_callback:
-                            chunk_callback("nodes", data["nodes_chunk"])
-                    elif "edges_chunk" in data:
-                        edge_objects = [Edge.from_dict(edge_dict) for edge_dict in data["edges_chunk"]]
-                        edges.extend(edge_objects)
-                        if chunk_callback:
-                            chunk_callback("edges", edge_objects)
-                
-                except EOFError:
-                    break
-        
-        return {
-            "nodes": nodes,
-            "edges": edges,
-            "metadata": metadata
-        }
-    
-    def _save_stream_json(self, data: Dict[str, Any], path: Path, chunk_size: int) -> None:
-        """Save large graph using streaming JSON."""
-        with open(path, "w") as f:
-            # Write metadata
-            metadata = data.get("metadata", {})
-            f.write('{"metadata":')
-            json.dump(metadata, f, default=str)
-            f.write('}\n')
-            
-            # Stream nodes
-            nodes = data.get("nodes", {})
-            node_items = list(nodes.items())
-            
-            for i in range(0, len(node_items), chunk_size):
-                chunk = dict(node_items[i:i + chunk_size])
-                f.write('{"nodes_chunk":')
-                json.dump(chunk, f, default=str)
-                f.write('}\n')
-            
-            # Stream edges
-            edges = [edge.to_dict() for edge in data.get("_edges", {}).values()]
-            for i in range(0, len(edges), chunk_size):
-                chunk = edges[i:i + chunk_size]
-                f.write('{"edges_chunk":')
-                json.dump(chunk, f, default=str)
-                f.write('}\n')
-    
-    def _load_stream_json(self, path: Path, chunk_callback=None) -> Dict[str, Any]:
-        """Load large graph using streaming JSON."""
-        nodes = {}
-        edges = []
-        metadata = {}
-        
-        with open(path, "r") as f:
-            for line in f:
-                data = json.loads(line.strip())
-                
-                if "metadata" in data:
-                    metadata = data["metadata"]
-                elif "nodes_chunk" in data:
-                    nodes.update(data["nodes_chunk"])
-                    if chunk_callback:
-                        chunk_callback("nodes", data["nodes_chunk"])
-                elif "edges_chunk" in data:
-                    edge_objects = [Edge.from_dict(edge_dict) for edge_dict in data["edges_chunk"]]
-                    edges.extend(edge_objects)
-                    if chunk_callback:
-                        chunk_callback("edges", edge_objects)
-        
-        return {
-            "nodes": nodes,
-            "edges": edges,
-            "metadata": metadata
-        }
-    
-    def _serialize_indexes(self, indexes: Dict[str, Any]) -> Dict[str, Any]:
-        """Serialize indexes for storage."""
-        serialized = {}
-        for attr_name, index in indexes.items():
-            serialized[attr_name] = {
-                str(value): list(node_set) for value, node_set in index.items()
-            }
-        return serialized
-    
-    def _deserialize_indexes(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Deserialize indexes from storage."""
-        deserialized = {}
-        for attr_name, index_data in data.items():
-            # Convert string keys back to appropriate types
-            deserialized[attr_name] = {
-                self._convert_key(key): set(node_set) 
-                for key, node_set in index_data.items()
-            }
-        return deserialized
-    
-    def _convert_key(self, key: str) -> IndexValue:
-        """Convert string key back to appropriate type."""
-        # Try to parse as int, then float, then keep as string
-        try:
-            return int(key)
-        except ValueError:
+            fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+            temporary = Path(name)
             try:
-                return float(key)
-            except ValueError:
-                if key.lower() in ('true', 'false'):
-                    return key.lower() == 'true'
-                return key
-    
-    def save_auto(self, graph_data: Dict[str, Any], path_hint: Optional[str] = None,
-                  graph_name: Optional[str] = None, format: Optional[str] = None,
-                  **kwargs) -> Path:
-        """
-        Save graph data with automatic path resolution and format detection.
-        
-        Args:
-            graph_data: Graph data dictionary
-            path_hint: Optional path hint for file location
-            graph_name: Name of the graph for auto-naming
-            format: Optional format override
-            **kwargs: Additional arguments for save operation
-            
-        Returns:
-            Path where the graph was saved
-            
-        Raises:
-            PersistenceError: If save operation fails
-        """
-        if not self._enhanced_enabled:
-            raise PersistenceError("Enhanced features not enabled. Set enhanced_api.path_resolution=True")
-        
+                stream = os.fdopen(fd, "wb")
+            except BaseException:
+                os.close(fd)
+                raise
+            with stream:
+                if stream.write(payload) != len(payload):
+                    raise OSError("Incomplete snapshot write")
+                stream.flush()
+                if durable:
+                    os.fsync(stream.fileno())
+            for attempt in range(10):
+                try:
+                    os.replace(temporary, path)
+                    break
+                except PermissionError as exc:
+                    # Windows replacement briefly locks the target against other publishers.
+                    if (
+                        os.name != "nt"
+                        or getattr(exc, "winerror", None) not in (5, 32, 33)
+                        or attempt == 9
+                    ):
+                        raise
+                    time.sleep(min(0.005 * 2**attempt, 0.05))
+            temporary = None
+            if durable:
+                _fsync_directory(path.parent)
+            return path
+        except Exception as exc:
+            raise PersistenceError(
+                f"Failed to save graph to {path}: {exc}",
+                file_path=str(path),
+                operation="save",
+                format=format,
+            ) from exc
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink()
+                except OSError:
+                    pass
+
+    def load(
+        self,
+        path: Path | str,
+        format: Optional[str] = None,
+        max_bytes: int = DEFAULT_MAX_BYTES,
+    ) -> dict:
+        """Read one bounded, optionally gzipped snapshot without executable codecs."""
         try:
-            # Resolve path automatically
-            if path_hint or graph_name:
-                resolved_path = self._path_resolver.resolve_path(path_hint, graph_name, format)
-            else:
-                resolved_path = self._path_resolver.get_default_path(
-                    graph_name or "graph", format
+            path = Path(path)
+            _validate_limit(max_bytes)
+            if format is not None:
+                format = _normalize_format(format)
+            payload = _read_payload(path, max_bytes)
+            if format is None:
+                format = _payload_format(path, payload)
+            if format == "json":
+                data = json.loads(
+                    payload.decode("utf-8-sig"),
+                    object_pairs_hook=_unique_object,
+                    parse_constant=_reject_constant,
                 )
-            
-            # Detect format if not specified
-            if not format:
-                format = self._path_resolver.detect_format(resolved_path)
-                if not format:
-                    format = self.config.get("storage", {}).get("default_format", "msgpack")
-            
-            # Ensure directory exists
-            self._path_resolver.ensure_directory(resolved_path)
-            
-            # Use atomic write if enabled
-            atomic_writes = self.config.get("persistence", {}).get("atomic_writes", True)
-            if atomic_writes:
-                with self.atomic_write(resolved_path) as temp_path:
-                    self.save(graph_data, temp_path, format, **kwargs)
             else:
-                self.save(graph_data, resolved_path, format, **kwargs)
-            
-            logger.info(f"Auto-saved graph to {resolved_path}")
-            return resolved_path
-            
-        except Exception as e:
-            raise PersistenceError(f"Auto-save failed: {e}", operation="save_auto")
-    
-    def load_auto(self, path_hint: Optional[str] = None, graph_name: Optional[str] = None,
-                  format: Optional[str] = None, **kwargs) -> Tuple[Dict[str, Any], Path]:
-        """
-        Load graph data with automatic path resolution and format detection.
-        
-        Args:
-            path_hint: Optional path hint for file location
-            graph_name: Name of the graph to search for
-            format: Optional format override
-            **kwargs: Additional arguments for load operation
-            
-        Returns:
-            Tuple of (loaded_graph_data, actual_path)
-            
-        Raises:
-            PersistenceError: If load operation fails
-        """
-        if not self._enhanced_enabled:
-            raise PersistenceError("Enhanced features not enabled. Set enhanced_api.path_resolution=True")
-        
-        try:
-            resolved_path = None
-            
-            # Try different resolution strategies
-            if path_hint:
-                # Direct path resolution
-                resolved_path = self._path_resolver.resolve_path(path_hint, graph_name, format)
-                if not resolved_path.exists():
-                    resolved_path = None
-            elif graph_name:
-                # Search for graph file by name
-                resolved_path = self._path_resolver.find_graph_file(graph_name)
-            
-            # If still not found, try default locations
-            if not resolved_path or not resolved_path.exists():
-                if graph_name:
-                    resolved_path = self._path_resolver.get_default_path(graph_name, format)
-                    if not resolved_path.exists():
-                        resolved_path = None
-            
-            if not resolved_path or not resolved_path.exists():
-                raise PersistenceError(f"Graph file not found for path_hint={path_hint}, graph_name={graph_name}",
-                                    operation="load_auto")
-            
-            # Detect format if not specified
-            if not format:
-                format = self._path_resolver.detect_format(resolved_path)
-                if not format:
-                    format = self.config.get("storage", {}).get("default_format", "msgpack")
-            
-            # Load the data
-            graph_data = self.load(resolved_path, format, **kwargs)
-            
-            logger.info(f"Auto-loaded graph from {resolved_path}")
-            return graph_data, resolved_path
-            
-        except Exception as e:
-            raise PersistenceError(f"Auto-load failed: {e}", operation="load_auto")
-    
-    def backup(self, graph_data: Dict[str, Any], name: str,
-               backup_dir: Optional[Path] = None) -> List[Path]:
-        """
-        Create backup(s) of graph data.
-        
-        Args:
-            graph_data: Graph data dictionary
-            name: Base name for backup files
-            backup_dir: Optional backup directory override
-            
-        Returns:
-            List of paths to created backup files
-            
-        Raises:
-            PersistenceError: If backup operation fails
-        """
-        if not self._enhanced_enabled:
-            raise PersistenceError("Enhanced features not enabled")
-        
-        try:
-            # Determine backup directory
-            if not backup_dir:
-                backup_dir = Path(self.config.get("persistence", {}).get("backup_directory",
-                                                                       "~/.fastgraph/backups/"))
-            backup_dir = backup_dir.expanduser()
-            
-            # Ensure backup directory exists
-            backup_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Get backup settings
-            max_backups = self.config.get("persistence", {}).get("max_backups", 5)
-            formats = self.config.get("security", {}).get("allowed_serialization_formats",
-                                                         ["msgpack", "pickle", "json"])
-            
-            backup_paths = []
-            timestamp = int(time.time())
-            
-            # Create backups in different formats
-            for format in formats:
-                backup_name = f"{name}_{timestamp}.{format}"
-                backup_path = backup_dir / backup_name
-                
-                # Save backup
-                self.save(graph_data, backup_path, format)
-                backup_paths.append(backup_path)
-            
-            # Cleanup old backups
-            self._cleanup_old_backups(name, backup_dir, max_backups)
-            
-            logger.info(f"Created {len(backup_paths)} backups for {name}")
-            return backup_paths
-            
-        except Exception as e:
-            raise PersistenceError(f"Backup failed: {e}", operation="backup")
-    
-    def restore_from_backup(self, name: str, backup_dir: Optional[Path] = None,
-                           format: Optional[str] = None) -> Tuple[Dict[str, Any], Path]:
-        """
-        Restore graph data from the most recent backup.
-        
-        Args:
-            name: Name of the graph to restore
-            backup_dir: Optional backup directory override
-            format: Optional format preference
-            
-        Returns:
-            Tuple of (restored_graph_data, backup_path)
-            
-        Raises:
-            PersistenceError: If restore operation fails
-        """
-        if not self._enhanced_enabled:
-            raise PersistenceError("Enhanced features not enabled")
-        
-        try:
-            # Determine backup directory
-            if not backup_dir:
-                backup_dir = Path(self.config.get("persistence", {}).get("backup_directory",
-                                                                       "~/.fastgraph/backups/"))
-            backup_dir = backup_dir.expanduser()
-            
-            # Find most recent backup
-            backup_path = self._find_latest_backup(name, backup_dir, format)
-            if not backup_path:
-                raise PersistenceError(f"No backup found for graph: {name}", operation="restore")
-            
-            # Detect format and load
-            detected_format = self._path_resolver.detect_format(backup_path)
-            graph_data = self.load(backup_path, detected_format)
-            
-            logger.info(f"Restored {name} from backup {backup_path}")
-            return graph_data, backup_path
-            
-        except Exception as e:
-            raise PersistenceError(f"Restore failed: {e}", operation="restore")
-    
-    def _cleanup_old_backups(self, name: str, backup_dir: Path, max_backups: int) -> None:
-        """Clean up old backup files, keeping only the most recent ones."""
-        try:
-            # Find all backup files for this name
-            backup_pattern = f"{name}_*"
-            backup_files = list(backup_dir.glob(backup_pattern))
-            
-            # Sort by modification time (newest first)
-            backup_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-            
-            # Remove excess backups
-            for backup_file in backup_files[max_backups:]:
-                backup_file.unlink()
-                logger.debug(f"Removed old backup: {backup_file}")
-                
-        except Exception as e:
-            logger.warning(f"Failed to cleanup old backups: {e}")
-    
-    def _find_latest_backup(self, name: str, backup_dir: Path,
-                           format: Optional[str] = None) -> Optional[Path]:
-        """Find the most recent backup for a graph."""
-        try:
-            backup_pattern = f"{name}_*"
-            if format:
-                backup_pattern += f".{format}"
-            
-            backup_files = list(backup_dir.glob(backup_pattern))
-            
-            if not backup_files:
-                return None
-            
-            # Return the most recently modified
-            latest = max(backup_files, key=lambda p: p.stat().st_mtime)
-            return latest
-            
-        except Exception as e:
-            logger.warning(f"Failed to find latest backup: {e}")
-            return None
-    
-    def get_supported_formats(self) -> List[str]:
-        """Get list of supported formats."""
-        return list(self._supported_formats)
-    
-    def __repr__(self) -> str:
-        """String representation."""
-        enhanced = "enhanced" if self._enhanced_enabled else "basic"
-        return f"PersistenceManager({enhanced}, formats={self._supported_formats})"
+                data = msgpack.unpackb(
+                    payload,
+                    raw=False,
+                    strict_map_key=True,
+                    object_pairs_hook=_unique_object,
+                    ext_hook=_reject_extension,
+                    max_str_len=max_bytes,
+                    max_bin_len=max_bytes,
+                    max_array_len=max_bytes,
+                    max_map_len=max_bytes,
+                    max_ext_len=max_bytes,
+                )
+            if (
+                type(data) is dict
+                and "nodes" in data
+                and "store" not in data
+                and "format" not in data
+            ):
+                data = _migrate_v2(data)
+            _validate_envelope(data)
+            return data
+        except Exception as exc:
+            raise PersistenceError(
+                f"Failed to load graph from {path}: {exc}",
+                file_path=str(path),
+                operation="load",
+                format=format,
+            ) from exc
+
+    def translate(
+        self,
+        source_path: Path | str,
+        target_path: Path | str,
+        source_format: Optional[str] = None,
+        target_format: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Path:
+        """Translate the same full envelope, preserving all opaque native store data."""
+        max_bytes = kwargs.pop("max_bytes", DEFAULT_MAX_BYTES)
+        data = self.load(source_path, format=source_format, max_bytes=max_bytes)
+        format = (
+            target_format
+            if target_format is not None
+            else _suffix_format(Path(target_path)) or "msgpack"
+        )
+        return self.save(data, target_path, format=format, **kwargs)
+
+    def get_supported_formats(self) -> list[str]:
+        return sorted(_FORMATS)

@@ -8,6 +8,7 @@ merging, and managing FastGraph configurations.
 import os
 import json
 import yaml
+from copy import deepcopy
 from typing import Any, Dict, Optional, Union
 from pathlib import Path
 
@@ -91,7 +92,7 @@ class ConfigManager:
         Returns:
             Configuration dictionary
         """
-        return self._config.copy()
+        return deepcopy(self._config)
     
     def get(self, key_path: str, default: Any = None) -> Any:
         """

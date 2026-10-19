@@ -19,6 +19,14 @@ class FastGraphError(Exception):
         return self.message
 
 
+class ClosedGraphError(FastGraphError):
+    """An operation used a closed store or graph handle."""
+
+
+class StaleReferenceError(FastGraphError):
+    """A handle belongs to a deleted scope or an earlier store generation."""
+
+
 class ConfigurationError(FastGraphError):
     """Raised when there's an error in configuration."""
     

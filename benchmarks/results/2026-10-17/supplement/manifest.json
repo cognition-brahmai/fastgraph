@@ -1,0 +1,458 @@
+{
+  "recorded_utc": "2026-10-17T12:33:56Z",
+  "python": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+  "executable": "C:\\Users\\kstya\\AppData\\Local\\Temp\\kilo\\fastgraph-benchmark-20261017\\Scripts\\python.exe",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "physical_cores": 10,
+  "logical_cores": 20,
+  "ram_total_gib": 23.118999481201172,
+  "ram_available_gib": 4.137550354003906,
+  "packages": {
+    "fastgx": "3.0.0",
+    "psutil": "7.2.2",
+    "networkx": "3.6.1",
+    "rustworkx": "0.18.1",
+    "igraph": "1.0.0",
+    "msgpack": "1.2.3",
+    "numpy": "2.4.6",
+    "maturin": "1.15.0"
+  },
+  "seed": 20261017,
+  "source_sha256": {
+    "native/src/lib.rs": "f9a55416dfc576a850c88f72afd5b61154640153b9fc44dfb70752ea85a55c10",
+    "Cargo.toml": "d04e89f1dc2b019ce15d62b1d2587b22ae760040f79e848c76af3e8f49e29f1d",
+    "Cargo.lock": "b215c059244818779968eae733a63358369c80670e55fcb352c599c5728ef8ef",
+    "fastgraph/core/graph.py": "d26e2c54b7dc8fdf93503f5000201d4a339d04fcfd3433fe17ddb0c9c0d608c3",
+    "fastgraph/core/traversal.py": "c7ec0cddc431d9e08eb0c64c721dc57be448ca230f564884fd49920d04df5ed0",
+    "fastgraph/core/persistence.py": "218adb0a69ee2daea26b712eacbd99f705ea9b94a2aaec78737802e4d4380239",
+    "benchmarks/in_depth.py": "8e4e7e497be2d3d3a823c1b610fd6d6358cc1049b4da2d814bc60ebba81ba23a",
+    "benchmarks/_peers.py": "bfcc7f3dc9ffeb20acfa7266ddbb10cdd6475417e69998fcfbc7962ca4a17427"
+  },
+  "git_commit": "54ab9b5e362996855c35be629ccf78a2a08d4df9",
+  "git_status": "?? benchmarks/_peers.py\n?? benchmarks/analyze_results.py\n?? benchmarks/in_depth.py\n?? benchmarks/results/\n",
+  "timing": "perf_counter_ns wall; process_time_ns CPU; GC enabled; input generation excluded",
+  "memory": "psutil RSS/private after GC; OS allocator retention included; process peak cumulative",
+  "isolation": "one fresh subprocess at a time, PYTHONHASHSEED=0, no source fastgraph imports",
+  "plan": [
+    {
+      "kind": "lifecycle_memory",
+      "engine": "fastgraph",
+      "repeat": 0,
+      "case": "lifecycle_memory:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "fastgraph",
+      "repeat": 0,
+      "case": "bfs_equivalent:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "native",
+      "repeat": 0,
+      "case": "lifecycle_memory:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "native",
+      "repeat": 0,
+      "case": "bfs_equivalent:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "networkx",
+      "repeat": 0,
+      "case": "lifecycle_memory:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "networkx",
+      "repeat": 0,
+      "case": "bfs_equivalent:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "rustworkx",
+      "repeat": 0,
+      "case": "lifecycle_memory:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "rustworkx",
+      "repeat": 0,
+      "case": "bfs_equivalent:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "igraph",
+      "repeat": 0,
+      "case": "lifecycle_memory:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "igraph",
+      "repeat": 0,
+      "case": "bfs_equivalent:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "fastgraph",
+      "repeat": 0,
+      "case": "lifecycle_memory:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "fastgraph",
+      "repeat": 0,
+      "case": "bfs_equivalent:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "native",
+      "repeat": 0,
+      "case": "lifecycle_memory:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "native",
+      "repeat": 0,
+      "case": "bfs_equivalent:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "networkx",
+      "repeat": 0,
+      "case": "lifecycle_memory:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "networkx",
+      "repeat": 0,
+      "case": "bfs_equivalent:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "rustworkx",
+      "repeat": 0,
+      "case": "lifecycle_memory:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "rustworkx",
+      "repeat": 0,
+      "case": "bfs_equivalent:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "igraph",
+      "repeat": 0,
+      "case": "lifecycle_memory:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "igraph",
+      "repeat": 0,
+      "case": "bfs_equivalent:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "fastgraph",
+      "repeat": 1,
+      "case": "lifecycle_memory:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "fastgraph",
+      "repeat": 1,
+      "case": "bfs_equivalent:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "native",
+      "repeat": 1,
+      "case": "lifecycle_memory:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "native",
+      "repeat": 1,
+      "case": "bfs_equivalent:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "networkx",
+      "repeat": 1,
+      "case": "lifecycle_memory:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "networkx",
+      "repeat": 1,
+      "case": "bfs_equivalent:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "rustworkx",
+      "repeat": 1,
+      "case": "lifecycle_memory:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "rustworkx",
+      "repeat": 1,
+      "case": "bfs_equivalent:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "igraph",
+      "repeat": 1,
+      "case": "lifecycle_memory:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "igraph",
+      "repeat": 1,
+      "case": "bfs_equivalent:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "fastgraph",
+      "repeat": 1,
+      "case": "lifecycle_memory:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "fastgraph",
+      "repeat": 1,
+      "case": "bfs_equivalent:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "native",
+      "repeat": 1,
+      "case": "lifecycle_memory:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "native",
+      "repeat": 1,
+      "case": "bfs_equivalent:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "networkx",
+      "repeat": 1,
+      "case": "lifecycle_memory:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "networkx",
+      "repeat": 1,
+      "case": "bfs_equivalent:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "rustworkx",
+      "repeat": 1,
+      "case": "lifecycle_memory:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "rustworkx",
+      "repeat": 1,
+      "case": "bfs_equivalent:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "igraph",
+      "repeat": 1,
+      "case": "lifecycle_memory:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "igraph",
+      "repeat": 1,
+      "case": "bfs_equivalent:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "fastgraph",
+      "repeat": 2,
+      "case": "lifecycle_memory:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "fastgraph",
+      "repeat": 2,
+      "case": "bfs_equivalent:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "native",
+      "repeat": 2,
+      "case": "lifecycle_memory:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "native",
+      "repeat": 2,
+      "case": "bfs_equivalent:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "networkx",
+      "repeat": 2,
+      "case": "lifecycle_memory:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "networkx",
+      "repeat": 2,
+      "case": "bfs_equivalent:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "rustworkx",
+      "repeat": 2,
+      "case": "lifecycle_memory:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "rustworkx",
+      "repeat": 2,
+      "case": "bfs_equivalent:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "igraph",
+      "repeat": 2,
+      "case": "lifecycle_memory:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "igraph",
+      "repeat": 2,
+      "case": "bfs_equivalent:nodes=25000",
+      "nodes": 25000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "fastgraph",
+      "repeat": 2,
+      "case": "lifecycle_memory:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "fastgraph",
+      "repeat": 2,
+      "case": "bfs_equivalent:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "native",
+      "repeat": 2,
+      "case": "lifecycle_memory:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "native",
+      "repeat": 2,
+      "case": "bfs_equivalent:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "networkx",
+      "repeat": 2,
+      "case": "lifecycle_memory:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "networkx",
+      "repeat": 2,
+      "case": "bfs_equivalent:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "rustworkx",
+      "repeat": 2,
+      "case": "lifecycle_memory:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "rustworkx",
+      "repeat": 2,
+      "case": "bfs_equivalent:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "lifecycle_memory",
+      "engine": "igraph",
+      "repeat": 2,
+      "case": "lifecycle_memory:nodes=100000",
+      "nodes": 100000
+    },
+    {
+      "kind": "bfs_equivalent",
+      "engine": "igraph",
+      "repeat": 2,
+      "case": "bfs_equivalent:nodes=100000",
+      "nodes": 100000
+    }
+  ]
+}
